@@ -1,0 +1,300 @@
+--- a/app/app.js
++++ b/app/app.js
+@@ -88,7 +88,7 @@
+ const matchStart = m => m.date && m.time ? Date.parse(m.date + 'T' + m.time + ':00+07:00') : null;
+ const sortDay = m => m.date || m.window?.[0] || m.month || '9999';
+ const ordered = (a,b) => sortDay(a).localeCompare(sortDay(b)) || (a.time || '').localeCompare(b.time || '') || a.round-b.round;
+-const leagueMatches = league => Object.values(matches).filter(m => m.league===league);
++const leagueMatches = league => Object.values(matches).filter(m => m.league===league).map(liveSummary);
+ const batch = ids => ids.map(id => matches[id]);
+ const roundName = m => m.league==='nc' ? phases[m.round-1] + (ties[m.tie].legs===2 ? ' · Lượt ' + (m.leg===1 ? 'đi' : 'về') : '') : 'Vòng ' + m.round + (m.makeup ? ' · Đá bù' : '');
+ const dataDate = () => appliedFeed ? vnDate.format(new Date(appliedFeed.publishedAt)) : fullDate(data.asOf);
+@@ -235,7 +235,10 @@
+ }
+ 
+ function status(m) {
+-  if (m.score) return ['Đã kết thúc','final'];
++  if (liveStale(m)) return ['Chờ VPF cập nhật','tbd'];
++  if (m.status==='live') return ['Đang diễn ra','live'];
++  if (m.status==='halfTime') return ['Nghỉ giữa hiệp','live'];
++  if (m.status==='final' && m.score) return ['Đã kết thúc','final'];
+   if (m.status==='postponed') return ['Hoãn','changed'];
+   if (m.status==='provisional') return ['Lịch dự kiến','provisional'];
+   if (!m.date || !m.time) return [m.date?'Chờ giờ thi đấu':'Chờ lịch thi đấu','tbd'];
+@@ -253,6 +256,7 @@
+   return 'Dự kiến '+fullDate(from)+(from===to?'':' – '+fullDate(to));
+ }
+ function matchRow(m, options={}) {
++  m=liveSummary(m);
+   const [label, css] = status(m);
+   const side = id => '<span class="match-team">'+crest(id)+'<span>'+escapeHtml(sideName(id))+'</span></span>';
+   const result = m.score ? m.score.join(' – ') : m.status==='postponed'?'—':m.time || '—';
+@@ -295,10 +299,11 @@
+   const league=current();
+   const rows=leagueMatches(state.league);
+   const next=rows.filter(m=>!m.score && m.status==='scheduled' && matchStart(m)>Date.now()).sort(ordered);
+-  const recent=rows.filter(m=>m.score).sort((a,b)=>ordered(b,a));
++  const recent=rows.filter(m=>m.status==='final' && m.score).sort((a,b)=>ordered(b,a));
+   const followed=rows.filter(m=>isFollowed(m) && !m.score && m.date && m.date>=todayVN() && m.status!=='postponed').sort(ordered).slice(0,3);
+-  const main=(next.length?next:recent).filter(m=>!followed.includes(m)).slice(0,4);
+-  const showTitle=next.length?'Trận sắp tới':'Kết quả gần đây';
++  const live=rows.filter(running).sort(ordered);
++  const main=(live.length?live:next.length?next:recent).filter(m=>!followed.includes(m)).slice(0,4);
++  const showTitle=live.length?'Đang diễn ra':next.length?'Trận sắp tới':'Kết quả gần đây';
+   const top=data.standings[state.league]?.slice(0,5);
+   return '<section class="home-intro"><div><p class="caps">MÙA '+data.season+'</p><h1>'+escapeHtml(league.name)+'</h1><p class="hero-meta">'+escapeHtml(league.sponsor)+' <span aria-hidden="true">·</span> '+league.clubs.length+' câu lạc bộ</p></div><img width="118" height="98" src="'+leagueLogo(state.league)+'" alt=""></section>'+
+     '<div class="home-grid"><div>'+
+@@ -349,11 +354,11 @@
+   const f=currentFilters();
+   const today=todayVN();
+   const end=shiftedDay(today,6);
+-  let rows=f.scope==='all'?Object.values(matches):leagueMatches(state.league);
++  let rows=f.scope==='all'?Object.values(matches).map(liveSummary):leagueMatches(state.league);
+   if (f.club) rows=rows.filter(m=>[sideId(m.home),sideId(m.away)].includes(f.club));
+   if (Object.hasOwn(quickDays,f.period)) rows=rows.filter(m=>m.date===shiftedDay(today,{yesterday:-1,today:0,tomorrow:1}[f.period]));
+   if (f.period==='week') rows=rows.filter(m=>m.date && m.date>=today && m.date<=end);
+-  if (f.period==='results') rows=rows.filter(m=>m.score);
++  if (f.period==='results') rows=rows.filter(m=>m.status==='final' && m.score);
+   if (f.period==='round') {
+     const round=Number(f.round||defaultRound(state.league));
+     rows=rows.filter(m=>m.round===round);
+@@ -431,10 +436,10 @@
+   return ids.includes(selected)?selected:ids[0];
+ }
+ function followedClubMatches(id) {
+-  const rows=Object.values(matches).filter(m=>sideId(m.home)===id || sideId(m.away)===id);
++  const rows=Object.values(matches).filter(m=>sideId(m.home)===id || sideId(m.away)===id).map(liveSummary);
+   const today=todayVN();
+   const now=Date.now();
+-  const next=rows.filter(m=>!m.score && m.status!=='postponed' && sortDay(m)!=='9999' &&
++  const next=rows.filter(m=>m.status!=='final' && m.status!=='postponed' && sortDay(m)!=='9999' &&
+     ((m.date || m.window?.[1] || m.month+'-31')>=today ||
+      (m.time && matchStart(m)>=now-24*60*60000))).sort(ordered);
+   const recent=rows.filter(m=>m.status==='final' && m.score).sort((a,b)=>ordered(b,a));
+@@ -519,10 +524,13 @@
+     return '<button type="button" data-tab="'+tab+'"'+(selected?' aria-current="page"':'')+'>'+escapeHtml(label)+'</button>';
+   }).join('');
+   const views={home:homeView,fixtures:fixturesView,competition:competitionView,stats:statsView,news:newsView,following:followingView,clubs:clubsView};
+-  content.innerHTML=m?matchDetail(m):state.missingMatch?
++  content.innerHTML=m?matchDetail(liveDetail(m)):state.missingMatch?
+     heading('Không tìm thấy trận',league.name)+'<section class="panel padded"><p>Liên kết có thể đã cũ. Bạn có thể tìm lại trận trong lịch đấu.</p><button class="button primary" type="button" data-action="match-back">Về lịch đấu</button></section>':
+     views[state.tab]();
+-  if (m) loadMatchDetail(m.id);
++  if (m) {
++    loadMatchDetail(m.id);
++    loadLiveMatch(m.id);
++  }
+   else if (state.tab==='following') revealFollowedClub(content.querySelector('[data-follow-club].selected'));
+   else if (newsIsOpen()) {
+     const selected=content.querySelector('[data-news-source].selected');
+@@ -703,9 +711,9 @@
+ }
+ function clubDetail(id) {
+   const team=clubs[id];
+-  const rows=Object.values(matches).filter(m=>sideId(m.home)===id || sideId(m.away)===id);
++  const rows=Object.values(matches).filter(m=>sideId(m.home)===id || sideId(m.away)===id).map(liveSummary);
+   const upcoming=rows.filter(m=>!m.score && m.date && m.date>=todayVN() && m.status!=='postponed').sort(ordered).slice(0,6);
+-  const played=rows.filter(m=>m.score).sort((a,b)=>ordered(b,a)).slice(0,4);
++  const played=rows.filter(m=>m.status==='final' && m.score).sort((a,b)=>ordered(b,a)).slice(0,4);
+   return '<header class="club-detail">'+crest(id)+'<div>'+detailHeading(team.name,leagues[team.league].name+' · '+data.season)+'</div></header>'+
+     '<div class="choices">'+saveButton(id)+(hosted?'<button class="button ghost" type="button" data-copy-calendar="'+id+'">Sao chép link lịch CLB</button>':'')+'</div>'+
+     (hosted?'<input class="share-input" id="share-url" aria-label="Đường dẫn lịch CLB" value="'+escapeHtml(clubCalendarUrl(id))+'" readonly hidden><p class="small muted" id="detail-message" role="status">Dán link vào mục đăng ký lịch qua URL trong ứng dụng lịch.</p>':'')+
+@@ -843,7 +851,7 @@
+   if (d.calendar) return downloadCalendar(d.calendar);
+   if (d.copyMatch && Object.hasOwn(matches,d.copyMatch)) return copyText(matchUrl(matches[d.copyMatch]),byId('share-url'),'Đã sao chép liên kết trận.');
+   if (d.copyCalendar && Object.hasOwn(clubs,d.copyCalendar)) return copyText(clubCalendarUrl(d.copyCalendar),byId('share-url'),'Đã sao chép liên kết lịch CLB.');
+-  if (d.action==='refresh') return refreshFeed(true);
++  if (d.action==='refresh') return Promise.all([refreshFeed(true),refreshMatchDay()]);
+   if (d.newsSource!==undefined) return chooseNewsSource(d.newsSource);
+   if (d.newsScroll) return scrollNewsRail(Number(d.newsScroll));
+   if (d.newsRetry!==undefined) return loadNews(true);
+@@ -1043,6 +1051,7 @@
+     navigator.serviceWorker.register('worker.js',{updateViaCache:'none'}).catch(()=>{ /* Online mode remains available. */ });
+   }
+   refreshFeed();
++  if (webRelease) startMatchDay();
+   const checkVisible=()=>{
+     if (!document.hidden) {
+       refreshFeed();
+--- a/app/index.html
++++ b/app/index.html
+@@ -16,6 +16,7 @@
+   <script src="competition-view.js" defer></script>
+   <script src="match-view.js" defer></script>
+   <script src="web-data.js" defer></script>
++  <script src="live-view.js" defer></script>
+   <script src="news-view.js" defer></script>
+   <script src="app.js" defer></script>
+ </head>
+--- a/app/web-data.js
++++ b/app/web-data.js
+@@ -56,8 +56,9 @@
+     fill(value,container){
+       Object.assign(match,value,{detailLoaded:true});
+       if (container.isConnected) {
+-        container.innerHTML=matchExtras(match);
+-        byId('match-media').innerHTML=matchMedia(match);
++        const current=liveDetail(match);
++        container.innerHTML=matchExtras(current);
++        byId('match-media').innerHTML=matchMedia(current);
+       }
+     },
+     error:'<div class="detail-section"><p role="status">Chưa tải được chi tiết trận.</p><button class="button ghost" type="button" data-retry-match="'+id+'">Thử lại</button></div>'});
+--- a/app/match-view.js
++++ b/app/match-view.js
+@@ -85,9 +85,10 @@
+ }
+ function matchLineup(m) {
+   const squads=m.matchSquads??m.lineups?.map(side=>({starters:side.map(name=>({name,number:null})),substitutes:[]}));
+-  if (!squads) return m.score?'<details class="detail-section match-disclosure"><summary>Đội hình và thay người</summary><p class="section-message">Chưa có danh sách thi đấu đã đối chiếu.</p></details>':'';
++  if (!squads) return m.status!=='postponed' && m.date?'<details class="detail-section match-disclosure"><summary>Đội hình và thay người</summary><p class="section-message">Chưa có danh sách thi đấu đã đối chiếu.</p></details>':'';
+   const renderGroup=(type,heading,changeLabel)=>'<section class="squad-group"><h2>'+heading+'</h2><div class="match-squad">'+
+     squads.map((squad,side)=>'<section class="squad-team"><h3>'+escapeHtml(sideName(side?m.away:m.home))+'</h3>'+
++      (type==='starters'?liveLineupSource(m,side):'')+
+       (type==='starters'&&squad&&squad.starters.length<11?'<p class="data-note">Nguồn liệt kê '+squad.starters.length+'/11 cầu thủ xuất phát.</p>':'')+
+       (squad?squadList(squad[type],changeLabel):'<p class="section-message">Chưa có danh sách đội này.</p>')+'</section>').join('')+'</div></section>';
+   return '<details class="detail-section match-disclosure"><summary>Đội hình và thay người</summary>'+
+@@ -98,7 +99,6 @@
+   return safeUrl(url)?'<a class="button primary" href="'+safeUrl(url)+'" target="_blank" rel="noopener noreferrer">'+label+'</a>':'';
+ }
+ function matchDetail(m) {
+-  const [label,cls]=status(m);
+   const showSide=slot=>{
+     const id=sideId(slot);
+     const team=crest(slot)+'<strong>'+escapeHtml(sideName(slot))+'</strong>';
+@@ -107,15 +107,20 @@
+   const middle=m.score?m.score.join(' – '):m.status==='postponed'?'—':m.time || '—';
+   const hasScoreTotal=m.league==='nc' && ties[m.tie].legs===2;
+   const pair=hasScoreTotal?tieMatches(m.tie):[];
+-  const bothPlayed=pair.length===2 && pair.every(game=>game.score);
++  const bothPlayed=pair.length===2 && pair.every(game=>game.status==='final' && game.score);
+   const total=bothPlayed?[pair[0].score[0]+pair[1].score[1],pair[0].score[1]+pair[1].score[0]]:null;
+   return '<article class="match-page"><header class="match-page-header"><button class="text-button" type="button" data-action="match-back">'+(history.state?.fromList?'Quay lại':'Về lịch đấu')+'</button>'+
+     '<h1 id="match-title" tabindex="-1">Chi tiết trận</h1><p>'+escapeHtml(leagues[m.league].name+' · '+roundName(m))+'</p></header>'+
+     '<section class="scoreboard"><div class="score-grid">'+showSide(m.home)+'<div class="score-value"><strong>'+escapeHtml(middle)+'</strong></div>'+showSide(m.away)+'</div>'+
+-    '<div class="score-status"><span class="status-tag '+cls+'">'+label+'</span>'+
+-    (m.penalties?'<small>Luân lưu '+m.penalties.join('–')+'</small>':'')+'</div>'+
++    '<div class="score-status">'+matchStatus(m)+'</div>'+
+     (total?'<p class="small centered">Tổng tỷ số '+total.join(' – ')+'</p>':'')+'</section>'+
+     '<div id="match-sections" class="match-sections">'+matchSections(m)+'</div></article>';
++}
++function matchStatus(m) {
++  const [label,css]=status(m);
++  return '<span class="status-tag '+css+'">'+label+'</span>'+
++    (m.penalties?'<small>Luân lưu '+m.penalties.join('–')+'</small>':'')+
++    (m.liveObservedAt?'<small>VPF · '+escapeHtml(vnTimestamp.format(new Date(m.liveObservedAt)))+'</small>':'');
+ }
+ function matchSections(m) {
+   const loading=m.hasDetail && !m.detailLoaded;
+@@ -131,8 +136,8 @@
+     '<div class="match-sections" id="match-extra">'+(loading?'<p class="detail-section" role="status">Đang tải chi tiết trận…</p>':matchExtras(m))+'</div>';
+ }
+ function matchMedia(m) {
+-  return (m.score?mediaLink(m.highlightUrl,'Xem video tổng hợp'):
+-    m.status==='scheduled'?mediaLink(m.watchUrl,'Mở trang phát sóng'):'')+
++  return (m.status==='final'?mediaLink(m.highlightUrl,'Xem video tổng hợp'):
++    (m.status==='scheduled'||running(m))?mediaLink(m.watchUrl,'Mở trang phát sóng'):'')+
+     (m.status==='scheduled' && matchStart(m)>Date.now()?'<button type="button" class="button ghost" data-calendar="'+m.id+'">Thêm vào lịch</button>':'');
+ }
+ function matchExtras(m) {
+@@ -151,7 +156,8 @@
+     (m.league==='nc'?'Xem nhánh đấu':'Xem bảng xếp hạng')+'</button></div>'+matchHistory(m)+
+     (hasScoreTotal?'<section class="detail-section"><h3>Hai lượt của cặp đấu</h3><div class="choices">'+pair.map(game=>'<button type="button" class="button ghost" data-match="'+game.id+'"'+(game.id===m.id?' disabled':'')+'>Lượt '+(game.leg===1?'đi':'về')+'</button>').join('')+'</div></section>':'')+
+     '<details class="detail-section match-disclosure"><summary>Nguồn và đối chiếu</summary><ul class="links-list">'+
+-    matchSources.map(source=>'<li>'+sourceLink(source)+'</li>').join('')+'</ul>'+matchEvidence(m)+'</details>';
++    matchSources.map(source=>'<li>'+sourceLink(source)+'</li>').join('')+
++    (m.liveTimelineSource?'<li>'+liveSourceLink(m.liveTimelineSource,'VPF · Diễn biến trận đấu')+'</li>':'')+'</ul>'+matchEvidence(m)+'</details>';
+ }
+ function matchEvidence(m) {
+   const labels={date:'Ngày thi đấu',time:'Giờ thi đấu',venue:'Sân vận động',window:'Khung thi đấu',scheduleNote:'Điều kiện xếp lịch',broadcast:'Kênh phát sóng',
+--- a/app/styles.css
++++ b/app/styles.css
+@@ -667,3 +667,5 @@
+   .news-copy { padding: 9px; }
+   .news-meta time { margin-inline-start: 0; }
+ }
++
++.status-tag.live,.match-center .live{color:var(--accent);font-weight:700}
+--- a/app/worker.js
++++ b/app/worker.js
+@@ -7,7 +7,7 @@
+ const cacheName=prefix+releaseId;
+ const root='releases/'+releaseId+'/';
+ const shell=['index.html',...['index-data.js','app.js','theme.js','styles.css','data-update.js','calendar.js',
+-  'match-view.js','competition-view.js','web-data.js','news-view.js','news-snapshot.js',
++  'match-view.js','competition-view.js','web-data.js','live-view.js','news-view.js','news-snapshot.js',
+   'assets/InterVariable.woff2','assets/vl1.webp','assets/vl2.webp','assets/nc.webp',
+   'assets/app-180.png','assets/app-192.png','assets/app-512.png'].map(file=>root+file)];
+ const scope=new URL('./',self.location.href);
+--- a/app/tools/build-web.cjs
++++ b/app/tools/build-web.cjs
+@@ -78,7 +78,7 @@
+ const size=Buffer.byteLength(boot);
+ if (size>120000) throw Error('Dữ liệu mở app vượt ngân sách 120 KB: '+size+' B');
+ fs.writeFileSync(path.join(output,'index-data.js'),boot);
+-for (const file of ['styles.css','theme.js','data-update.js','calendar.js','match-view.js','competition-view.js','web-data.js','news-view.js','news-snapshot.js','app.js']) fs.copyFileSync(path.join(__dirname,'..',file),path.join(output,file));
++for (const file of ['styles.css','theme.js','data-update.js','calendar.js','match-view.js','competition-view.js','web-data.js','live-view.js','news-view.js','news-snapshot.js','app.js']) fs.copyFileSync(path.join(__dirname,'..',file),path.join(output,file));
+ require('../news-snapshot.js');
+ json(path.join(out,'news-feed.json'),{...window.VPF_NEWS,mode:'snapshot'});
+ const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8')
+@@ -88,7 +88,7 @@
+   .replace('src="data.js"','src="'+folder+'index-data.js"')
+   .replace(/\sfile:(?=[; ])/g,'')
+   .replace(/  <script src="data-published\.js" defer><\/script>\n/,'')
+-  .replace(/(src|href)="(styles\.css|theme\.js|data-update\.js|calendar\.js|match-view\.js|competition-view\.js|web-data\.js|news-view\.js|app\.js|assets\/vl1\.png)"/g,
++  .replace(/(src|href)="(styles\.css|theme\.js|data-update\.js|calendar\.js|match-view\.js|competition-view\.js|web-data\.js|live-view\.js|news-view\.js|app\.js|assets\/vl1\.png)"/g,
+     (_,type,url)=>type+'="'+folder+url.replace(/\.png$/,'.webp')+'"');
+ fs.writeFileSync(path.join(out,'index.html'),html);
+ json(path.join(out,'release-info.json'),release);
+--- a/app/tools/release_inputs.py
++++ b/app/tools/release_inputs.py
+@@ -7,7 +7,7 @@
+ 
+ APP = Path(__file__).resolve().parents[1]
+ RUNTIME = ('index.html','styles.css','data.js','data-update.js','calendar.js',
+-           'theme.js','match-view.js','competition-view.js','web-data.js','news-view.js',
++           'theme.js','match-view.js','competition-view.js','web-data.js','live-view.js','news-view.js',
+            'news-snapshot.js','app.js','worker.js')
+ BUILD = ('tools/publish.cjs','tools/build-web.cjs','tools/release.py','tools/release_inputs.py',
+          'tools/prepare-assets.py')
+--- a/app/tools/sync-pages.py
++++ b/app/tools/sync-pages.py
+@@ -13,6 +13,7 @@
+ 
+ from release_inputs import APP, input_hash, verify_bundle
+ from vpf_delivery import unpack
++from live.stage import stage
+ 
+ 
+ def command(*args, check=True):
+@@ -112,18 +113,7 @@
+     for scratch in ('lock.sqlite','latest-check.json','highlight-check.json'):
+         (work/scratch).unlink(missing_ok=True)
+ 
+-    verify_bundle(sealed)
+-    shutil.copytree(sealed,output)
+-    if previous_assets.exists():
+-        for asset in previous_assets.iterdir():
+-            dest=output/'releases'/asset.name
+-            if not dest.exists():
+-                shutil.copytree(asset,dest)
+-    shutil.copyfile(news,output/'news-feed.json')
+-    shutil.copyfile(status,output/'data-status.json')
+-    # This manifest authenticates the sealed bundle in the checkpoint. The
+-    # published tree additionally contains mutable status, news and old assets.
+-    (output/'release-files.json').unlink()
++    stage(state, output)
+     published = read(status)
+     latest_check = published.get('lastSuccessfulCheckAt')
+     latest_video_check = published.get('lastHighlightCheckAt')
+--- a/app/tools/import-vpf.py
++++ b/app/tools/import-vpf.py
+@@ -220,7 +220,7 @@
+     if not match_time or f'{match_time[3]}-{int(match_time[2]):02d}-{match_time[1]}' != match['date'] or match_time[4] != match['time']:
+         raise ValueError('Ngày hoặc giờ trên trang trận khác lịch đang lưu.')
+     statuses = view.xpath(f'.//*[{cls("jo-match-status")}]')
+-    if any(re.search(r'\b(?:live|đang diễn ra)\b', text(node), re.I) for node in statuses):
++    if any(re.search(r"\b(?:live|ht|half[ -]time|đang diễn ra|hiệp\s*[12])\b|nghỉ giữa hiệp|hết hiệp\s*1|\b\d{1,3}\s*[′\x27]", text(node), re.I) for node in statuses):
+         raise MatchInProgress('VPF vẫn hiển thị trận đang diễn ra.')
+     actual = [int(text(one(view, f'.//*[{cls(f"BigMScore{side}")}]'))) for side in (1, 2)]
+     if actual != score or match.get('score') not in (None, score):
