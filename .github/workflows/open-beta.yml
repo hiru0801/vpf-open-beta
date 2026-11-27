@@ -8,8 +8,6 @@ on:
       - vpf-bundle.zip
       - vpf-sync-input.json
   workflow_dispatch:
-  schedule:
-    - cron: '2-57/5 * * * *'
 
 concurrency:
   group: vpf-open-beta
