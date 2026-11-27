@@ -1,126 +1,126 @@
 name: VPF Open Beta
 
 on:
-push:
-branches: [main]
-paths:
-- .github/workflows/open-beta.yml
-- vpf-bundle.zip
-workflow_dispatch:
-schedule:
-- cron: '2-57/5 * * * *'
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/open-beta.yml
+      - vpf-bundle.zip
+  workflow_dispatch:
+  schedule:
+    - cron: '2-57/5 * * * *'
 
 concurrency:
-group: vpf-open-beta
-cancel-in-progress: false
+  group: vpf-open-beta
+  cancel-in-progress: false
 
 jobs:
-sync:
-runs-on: ubuntu-latest
-timeout-minutes: 12
-permissions:
-contents: write
-outputs:
-sync_result: ${{ steps.sync.outputs.sync_result }}
-news_hash: ${{ steps.sync.outputs.news_hash }}
-data_hash: ${{ steps.sync.outputs.data_hash }}
-steps:
-- uses: actions/checkout@v6
-- uses: actions/setup-python@v6
-with:
-python-version: '3.12'
-- uses: actions/setup-node@v6
-with:
-node-version: '24'
-- name: Verify and unpack the application
-shell: bash
-run: |
-set -euo pipefail
-printf '%s  vpf-bundle.zip\n' 'e6e7198cde9b4bef3c81112d044b008b73671ff5eaff6000315966c7ac85ca70' | sha256sum -c
-unzip -q vpf-bundle.zip
-- run: python -m pip install --disable-pip-version-check -r requirements.txt
-- name: Restore the last verified release
-shell: bash
-run: |
-set -euo pipefail
-checkpoint="$RUNNER_TEMP/vpf-checkpoint"
-if git ls-remote --exit-code --heads origin refs/heads/open-beta-data > /dev/null; then
-git fetch --no-tags origin refs/heads/open-beta-data
-git worktree add --detach "$checkpoint" FETCH_HEAD
-else
-code=$?
-if [[ "$code" != 2 ]]; then exit "$code"; fi
-git worktree add --detach "$checkpoint" HEAD
-git -C "$checkpoint" switch --orphan open-beta-data
-fi
-- name: Sync sources and verify the bundle
-id: sync
-shell: bash
-env:
-EVENT_NAME: ${{ github.event_name }}
-run: |
-set -euo pipefail
-flags=()
-if [[ "$EVENT_NAME" == workflow_dispatch ]]; then flags+=(--force-vpf); fi
-result=0
-python app/tools/sync-pages.py 
---state "$RUNNER_TEMP/vpf-checkpoint/data" 
---seed "$GITHUB_WORKSPACE/seed-web" 
---output "$RUNNER_TEMP/vpf-web" "${flags[@]}" || result=$?
-if [[ "$result" != 0 && "$result" != 2 ]]; then exit "$result"; fi
-printf 'sync_result=%s\n' "$result" >> "$GITHUB_OUTPUT"
-printf 'news_hash=%s\n' "$(sha256sum "$RUNNER_TEMP/vpf-web/news-feed.json" | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
-printf 'data_hash=%s\n' "$(sha256sum "$RUNNER_TEMP/vpf-web/data-status.json" | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
-- name: Save verified state
-shell: bash
-working-directory: ${{ runner.temp }}/vpf-checkpoint
-run: |
-set -euo pipefail
-git config user.name 'github-actions[bot]'
-git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-git add -- data
-if ! git diff --cached --quiet; then git commit -m 'Update VPF data'; fi
-git -C "$GITHUB_WORKSPACE" push origin "$(git rev-parse HEAD):refs/heads/open-beta-data"
-- name: Stage the public website
-uses: actions/upload-pages-artifact@v4
-with:
-path: ${{ runner.temp }}/vpf-web
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: write
+    outputs:
+      sync_result: ${{ steps.sync.outputs.sync_result }}
+      news_hash: ${{ steps.sync.outputs.news_hash }}
+      data_hash: ${{ steps.sync.outputs.data_hash }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify and unpack the application
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s  vpf-bundle.zip\n' 'e6e7198cde9b4bef3c81112d044b008b73671ff5eaff6000315966c7ac85ca70' | sha256sum -c
+          unzip -q vpf-bundle.zip
+      - run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Restore the last verified release
+        shell: bash
+        run: |
+          set -euo pipefail
+          checkpoint="$RUNNER_TEMP/vpf-checkpoint"
+          if git ls-remote --exit-code --heads origin refs/heads/open-beta-data > /dev/null; then
+            git fetch --no-tags origin refs/heads/open-beta-data
+            git worktree add --detach "$checkpoint" FETCH_HEAD
+          else
+            code=$?
+            if [[ "$code" != 2 ]]; then exit "$code"; fi
+            git worktree add --detach "$checkpoint" HEAD
+            git -C "$checkpoint" switch --orphan open-beta-data
+          fi
+      - name: Sync sources and verify the bundle
+        id: sync
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          flags=()
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then flags+=(--force-vpf); fi
+          result=0
+          python app/tools/sync-pages.py \
+            --state "$RUNNER_TEMP/vpf-checkpoint/data" \
+            --seed "$GITHUB_WORKSPACE/seed-web" \
+            --output "$RUNNER_TEMP/vpf-web" "${flags[@]}" || result=$?
+          if [[ "$result" != 0 && "$result" != 2 ]]; then exit "$result"; fi
+          printf 'sync_result=%s\n' "$result" >> "$GITHUB_OUTPUT"
+          printf 'news_hash=%s\n' "$(sha256sum "$RUNNER_TEMP/vpf-web/news-feed.json" | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
+          printf 'data_hash=%s\n' "$(sha256sum "$RUNNER_TEMP/vpf-web/data-status.json" | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Save verified state
+        shell: bash
+        working-directory: ${{ runner.temp }}/vpf-checkpoint
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- data
+          if ! git diff --cached --quiet; then git commit -m 'Update VPF data'; fi
+          git -C "$GITHUB_WORKSPACE" push origin "$(git rev-parse HEAD):refs/heads/open-beta-data"
+      - name: Stage the public website
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: ${{ runner.temp }}/vpf-web
 
-publish:
-needs: sync
-runs-on: ubuntu-latest
-timeout-minutes: 12
-permissions:
-contents: read
-pages: write
-id-token: write
-environment:
-name: github-pages
-url: ${{ steps.release.outputs.page_url }}
-steps:
-- uses: actions/deploy-pages@v4
-id: release
-- name: Check the public data
-shell: bash
-env:
-SITE_URL: ${{ steps.release.outputs.page_url }}
-SYNC_RESULT: ${{ needs.sync.outputs.sync_result }}
-NEWS_HASH: ${{ needs.sync.outputs.news_hash }}
-DATA_HASH: ${{ needs.sync.outputs.data_hash }}
-run: |
-set -euo pipefail
-root="${SITE_URL%/}"
-stamp="run=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-curl -fsS --retry 3 --max-time 20 "$root/release-info.json?$stamp" | jq -e '.revision >= 16'
-curl -fsS --retry 3 --max-time 20 "$root/calendars/SLN.ics" | awk '/^BEGIN:VCALENDAR/{ok=1} END{exit !ok}'
-curl -fsS --retry 3 --max-time 20 "$root/news-feed.json?$stamp" -o news-feed.json
-curl -fsS --retry 3 --max-time 20 "$root/data-status.json?$stamp" -o data-status.json
-printf '%s  news-feed.json\n%s  data-status.json\n' "$NEWS_HASH" "$DATA_HASH" | sha256sum -c
-jq -e '.articles | length > 0' news-feed.json
-jq -e '.schema == 1' data-status.json
-if [[ "$SYNC_RESULT" != 0 ]]; then
-echo '::error::Nguồn tin hoặc dữ liệu VPF bị gián đoạn. Site đang giữ dữ liệu đã xác minh.'
-exit 1
-fi
-jq -e '.mode == "sync" and (.sources | length == 6 and all(.status == "ok"))' news-feed.json
-jq -e '.mode == "sync" and .state == "ok"' data-status.json
+  publish:
+    needs: sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.release.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: release
+      - name: Check the public data
+        shell: bash
+        env:
+          SITE_URL: ${{ steps.release.outputs.page_url }}
+          SYNC_RESULT: ${{ needs.sync.outputs.sync_result }}
+          NEWS_HASH: ${{ needs.sync.outputs.news_hash }}
+          DATA_HASH: ${{ needs.sync.outputs.data_hash }}
+        run: |
+          set -euo pipefail
+          root="${SITE_URL%/}"
+          stamp="run=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          curl -fsS --retry 3 --max-time 20 "$root/release-info.json?$stamp" | jq -e '.revision >= 16'
+          curl -fsS --retry 3 --max-time 20 "$root/calendars/SLN.ics" | awk '/^BEGIN:VCALENDAR/{ok=1} END{exit !ok}'
+          curl -fsS --retry 3 --max-time 20 "$root/news-feed.json?$stamp" -o news-feed.json
+          curl -fsS --retry 3 --max-time 20 "$root/data-status.json?$stamp" -o data-status.json
+          printf '%s  news-feed.json\n%s  data-status.json\n' "$NEWS_HASH" "$DATA_HASH" | sha256sum -c
+          jq -e '.articles | length > 0' news-feed.json
+          jq -e '.schema == 1' data-status.json
+          if [[ "$SYNC_RESULT" != 0 ]]; then
+            echo '::error::Nguồn tin hoặc dữ liệu VPF bị gián đoạn. Site đang giữ dữ liệu đã xác minh.'
+            exit 1
+          fi
+          jq -e '.mode == "sync" and (.sources | length == 6 and all(.status == "ok"))' news-feed.json
+          jq -e '.mode == "sync" and .state == "ok"' data-status.json
