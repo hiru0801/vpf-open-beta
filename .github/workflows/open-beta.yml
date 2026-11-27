@@ -29,6 +29,7 @@ jobs:
       vpf_error: ${{ steps.sync.outputs.vpf_error }}
       news_hash: ${{ steps.sync.outputs.news_hash }}
       data_hash: ${{ steps.sync.outputs.data_hash }}
+      artifact_name: ${{ steps.sync.outputs.artifact_name }}
       live_hash: ${{ steps.sync.outputs.live_hash }}
       deploy: ${{ steps.sync.outputs.deploy }}
     steps:
@@ -840,6 +841,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
         run: |
+          printf 'artifact_name=github-pages-%s\n' "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
           set -euo pipefail
           state="$RUNNER_TEMP/vpf-checkpoint/data"
           output="$RUNNER_TEMP/vpf-web"
@@ -897,6 +899,7 @@ jobs:
         if: steps.sync.outputs.deploy == 'true'
         uses: actions/upload-pages-artifact@v4
         with:
+          name: ${{ steps.sync.outputs.artifact_name }}
           path: ${{ runner.temp }}/vpf-web
 
   publish:
@@ -914,6 +917,8 @@ jobs:
     steps:
       - uses: actions/deploy-pages@v4
         id: release
+        with:
+          artifact_name: ${{ needs.sync.outputs.artifact_name }}
       - name: Check the public data
         shell: bash
         env:

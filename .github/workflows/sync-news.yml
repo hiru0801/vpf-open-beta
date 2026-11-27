@@ -19,6 +19,7 @@ jobs:
       news_ok: ${{ steps.sync.outputs.news_ok }}
       news_hash: ${{ steps.sync.outputs.news_hash }}
       data_hash: ${{ steps.sync.outputs.data_hash }}
+      artifact_name: ${{ steps.sync.outputs.artifact_name }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -44,6 +45,7 @@ jobs:
         id: sync
         shell: bash
         run: |
+          printf 'artifact_name=github-pages-%s\n' "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
           set +e
           flags=()
           if [ -f "$GITHUB_WORKSPACE/vpf-sync-input.json" ]; then
@@ -82,6 +84,7 @@ jobs:
       - name: Stage the public website
         uses: actions/upload-pages-artifact@v4
         with:
+          name: ${{ steps.sync.outputs.artifact_name }}
           path: ${{ runner.temp }}/vpf-web
 
   publish:
@@ -98,6 +101,8 @@ jobs:
     steps:
       - id: release
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: ${{ needs.sync-news.outputs.artifact_name }}
       - name: Verify published news-feed.json and data-status.json
         shell: bash
         env:
