@@ -826,6 +826,7 @@ jobs:
         run: |
           set -euo pipefail
           checkpoint="$RUNNER_TEMP/vpf-checkpoint"
+          git worktree prune --expire now
           if git ls-remote --exit-code --heads origin refs/heads/open-beta-data > /dev/null; then
             git fetch --no-tags origin refs/heads/open-beta-data
             git worktree add --detach "$checkpoint" FETCH_HEAD
