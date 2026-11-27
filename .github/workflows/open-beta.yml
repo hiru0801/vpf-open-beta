@@ -151,7 +151,7 @@ jobs:
           +        return body.read_bytes(), final_headers
           --- a/app/tools/import-vpf.py
           +++ b/app/tools/import-vpf.py
-          @@ -14,6 +14,7 @@
+          @@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlsplit
            
            from lxml import html
            from vpf_clubs import player_id
@@ -159,7 +159,7 @@ jobs:
            
            APP = Path(__file__).resolve().parents[1]
            CALENDAR = 'https://vpf.vn/season/v-league-2027/?action=calendar'
-          @@ -148,12 +149,9 @@
+          @@ -148,12 +149,9 @@ def cached_page(url, cache, name):
                filename = cache / name
                if filename.is_file():
                    return html.fromstring(filename.read_text(encoding='utf-8'))
@@ -175,9 +175,30 @@ jobs:
                return page
            
            
+          @@ -206,6 +204,10 @@ def calendar_results(doc):
+                       yield row.date, row.teams, row.score, row.url
+           
+           
+          +class MatchInProgress(ValueError):
+          +    """VPF is showing an in-progress score for this match."""
+          +
+          +
+           def parse_match(doc, match, names, score, vpf_season_id=VPF_SEASON_ID, *, verify_penalties=False):
+               view = one(doc, '//*[@id="jsMatchViewID"]')
+               teams = view.xpath(f'.//*[{cls("jsMatchPartName")}]//a')
+          @@ -217,6 +219,9 @@ def parse_match(doc, match, names, score, vpf_season_id=VPF_SEASON_ID, *, verify
+                                      text(one(view, f'.//*[{cls("matchdtime")}]')), re.I)
+               if not match_time or f'{match_time[3]}-{int(match_time[2]):02d}-{match_time[1]}' != match['date'] or match_time[4] != match['time']:
+                   raise ValueError('Ngày hoặc giờ trên trang trận khác lịch đang lưu.')
+          +    statuses = view.xpath(f'.//*[{cls("jo-match-status")}]')
+          +    if any(re.search(r'\b(?:live|đang diễn ra)\b', text(node), re.I) for node in statuses):
+          +        raise MatchInProgress('VPF vẫn hiển thị trận đang diễn ra.')
+               actual = [int(text(one(view, f'.//*[{cls(f"BigMScore{side}")}]'))) for side in (1, 2)]
+               if actual != score or match.get('score') not in (None, score):
+                   raise ValueError('Tỷ số nguồn khác dữ liệu đã lưu. Cần duyệt riêng.')
           --- a/app/tools/backfill-vpf.py
           +++ b/app/tools/backfill-vpf.py
-          @@ -40,7 +40,7 @@
+          @@ -40,7 +40,7 @@ for (const m of Object.values(matches)) {
              m.homeClub=sideId(base.ties,matches,m.home);
              m.awayClub=sideId(base.ties,matches,m.away);
            }
@@ -186,7 +207,7 @@ jobs:
            """
                return json.loads(subprocess.check_output(['node','-e',script],cwd=APP,
                                                         input=json.dumps(candidate).encode() if candidate else b''))
-          @@ -155,6 +155,7 @@
+          @@ -155,6 +155,7 @@ def prepare(cache, now, selected=tuple(CALENDARS), include_results=False, recent
                    m,row,league_name,sid,calendar=job
                    day,names,score,url,kickoff,penalties,*_=row
                    mid=m['id']
@@ -194,7 +215,16 @@ jobs:
                    try:
                        page=source['cached_page'](url,cache,mid+'.html')
                        expected={**m,'date':day,'time':kickoff,'score':None,'penalties':penalties}
-          @@ -207,6 +208,7 @@
+          @@ -165,6 +166,8 @@ def prepare(cache, now, selected=tuple(CALENDARS), include_results=False, recent
+                           patch['window']=None
+                       if m['score']!=score and m.get('goals'):
+                           patch['goals']=None
+          +        except source['MatchInProgress']:
+          +            return None,(mid,dict(source=url,status='live',issues=[]))
+                   except (ValueError, OSError, subprocess.CalledProcessError) as error:
+                       return None,(mid,dict(source=url,pendingReview=True,issues=[str(error)]))
+                   protected = set()
+          @@ -207,6 +210,7 @@ def prepare(cache, now, selected=tuple(CALENDARS), include_results=False, recent
            
                    previous_squads=m.get('matchSquads') or [None,None]
                    original_ids=set(identity(original))
@@ -202,7 +232,7 @@ jobs:
                    for e in events:
                        side = 1-e['side'] if e['type']=='ownGoal' else e['side']
                        squad = squads[side] if squads else None
-          @@ -218,16 +220,22 @@
+          @@ -218,16 +222,22 @@ def prepare(cache, now, selected=tuple(CALENDARS), include_results=False, recent
                        notes.append(f'{e["name"]} ({e["minute"]}′): chưa khớp danh sách thi đấu.')
                        prior = identity([e])[0] in original_ids
                        if scoring and (not prior or bool(squad) and listed(e,previous_squads[side])):
@@ -229,7 +259,7 @@ jobs:
                    if not any(value!=m.get(key) for key,value in patch.items()):
                        return None,(mid,counts)
                    verified=['date','score']+[key for key in ('time','penalties') if key in patch]
-          @@ -260,15 +268,26 @@
+          @@ -260,15 +270,26 @@ def prepare(cache, now, selected=tuple(CALENDARS), include_results=False, recent
                                    roster[field]=previous[field]
                            if {f:v for f,v in roster.items() if f!='at'}!={f:v for f,v in previous.items() if f!='at'}:
                                rosters[key]=roster
@@ -542,10 +572,19 @@ jobs:
           +    pack(args.base.resolve(),args.output.resolve())
           --- a/app/tools/check-sync.py
           +++ b/app/tools/check-sync.py
-          @@ -81,4 +81,18 @@
+          @@ -14,6 +14,7 @@ from lxml import html
+           ROOT=Path(__file__).resolve().parents[1]
+           tool=runpy.run_path(str(ROOT/'tools/backfill-vpf.py'))
+           source=tool['source']
+          +parse_match=source['parse_match']
+           published=datetime.fromisoformat(json.loads((ROOT/'updates.json').read_text())['publishedAt'])
+           at=(published+timedelta(hours=1)).isoformat(timespec='milliseconds')
+           snapshot=tool['snapshot']()
+          @@ -81,4 +82,42 @@ with TemporaryDirectory() as temp:
                draft,report=tool['prepare'](cache,at,['nc'],True,None)
                assert draft is None and report[older_id]['pendingReview']
            
+          -print('PASS · đổi giờ/sân, hoãn, dữ liệu trống, đối chiếu bàn cũ và hàng chờ xác minh.')
           +    # A confirmed official score can move a match between the two lists while
           +    # the goal timeline and official table are still being reconciled.
           +    at=(datetime.fromisoformat(fixture['date']+'T21:30:00+07:00')).isoformat(timespec='milliseconds')
@@ -560,7 +599,31 @@ jobs:
           +    assert 'events' not in result['patch'] and report[fixture_id]['pendingReview'] and report['table-vl1']['pendingReview']
           +    valid_candidate(draft)
           +
-           print('PASS · đổi giờ/sân, hoãn, dữ liệu trống, đối chiếu bàn cũ và hàng chờ xác minh.')
+          +with TemporaryDirectory() as temp:
+          +    cache=Path(temp)
+          +    year,month,day=fixture['date'].split('-')
+          +    home,away=(escape(snapshot['clubs'][fixture[key]]['name']) for key in ('homeClub','awayClub'))
+          +    sid=tool['CALENDARS']['vl1'][1]
+          +    newest=calendar_html(fixture,kickoff=fixture['time'],score='0 - 0')
+          +    match_page=html.fromstring(f'''<div id="jsMatchViewID">
+          +      <div class="matchdtime">{day} tháng {int(month)}, {year} - {fixture['time']}</div>
+          +      <div class="jo-match-status"><img src="goal_white.png"><span>LIVE</span></div>
+          +      <div class="jsMatchPartName"><a href="?sid={sid}">{home}</a></div>
+          +      <div class="jsMatchPartName"><a href="?sid={sid}">{away}</a></div>
+          +      <div class="BigMScore1">0</div><div class="BigMScore2">0</div>
+          +    </div>''')
+          +    source['parse_match']=parse_match
+          +    source['cached_page']=lambda url,*_: match_page if url==match_url else newest
+          +    draft,report=tool['prepare'](cache,at,['vl1'],True,None)
+          +    assert draft is None and report[fixture_id]['status']=='live'
+          +
+          +    match_page.xpath('.//span')[0].text=None
+          +    draft,_=tool['prepare'](cache,at,['vl1'],True,None)
+          +    result=draft['matches'][-1]
+          +    assert result['id']==fixture_id and result['patch']['status']=='final' and result['patch']['score']==[0,0]
+          +    valid_candidate(draft)
+          +
+          +print('PASS · đổi giờ/sân, hoãn, dữ liệu trống, đối chiếu bàn cũ, hàng chờ xác minh và trạng thái LIVE.')
           diff --git a/app/news-view.js b/app/news-view.js
           --- a/app/news-view.js
           +++ b/app/news-view.js
