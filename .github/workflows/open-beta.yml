@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   sync:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.VPF_MATCHDAY_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 12
     permissions:
       contents: write
@@ -817,7 +817,7 @@ jobs:
         run: |
           if ! command -v tesseract >/dev/null; then
             sudo apt-get update -qq
-            sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-eng
+            sudo apt-get install -y -qq --no-install-recommends tesseract-ocr tesseract-ocr-eng
           fi
       - run: python -m pip install --disable-pip-version-check -r requirements.txt fonttools==4.57.0
       - name: Restore the last verified release

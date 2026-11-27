@@ -2,13 +2,13 @@
 
 **Phiếu đăng ký** lấy từ ba chuyên mục WordPress của VPF. Chuyên mục luôn được kiểm tra, kể cả khi trận đã bắt đầu. Ảnh được ghép theo mùa, giải, vòng, hai đội và ngày giờ trên phiếu. OCR đối chiếu số áo và tên với danh sách đăng ký CLB. Mỗi đội phải có 11 cầu thủ xuất phát và số áo duy nhất. Phiếu OCR chưa đạt được đưa vào luồng đối chiếu, còn đội hình đã xác minh tiếp tục được phục vụ. Mỗi trận lưu tối đa tám phiên bản ảnh theo URL, mã băm và thời điểm thấy lần đầu.
 
-**Trang trận VPF** cung cấp trạng thái, tỷ số, diễn biến và thay người. Đội hình trên trang trận chỉ được dùng khi thiếu phiếu đã xác minh của đội đó. Phiếu VPF hợp lệ thay thế dữ liệu dự phòng. Thời điểm vào và rời sân đến từ trang trận. Tỷ số đang đá hoặc nghỉ giữa hiệp không vào kết quả gần đây và không làm thay đổi bảng xếp hạng đã công bố. Tỷ số chung cuộc cần trạng thái kết thúc rõ ràng và lịch VPF khớp, hoặc bản dữ liệu chính thức đã xác minh. Nếu VPF không ghi rõ trạng thái, UI giữ kết quả đã kiểm chứng hoặc hiển thị trạng thái cập nhật gần nhất.
+**Trang trận VPF** cung cấp trạng thái, tỷ số, diễn biến và thay người. Đội hình trên trang trận chỉ được dùng khi thiếu phiếu đã xác minh của đội đó. Phiếu VPF hợp lệ thay thế dữ liệu dự phòng. Thời điểm vào và rời sân đến từ trang trận. Tỷ số đang đá hoặc nghỉ giữa hiệp không vào kết quả gần đây và không làm thay đổi bảng xếp hạng đã công bố. Tỷ số chung cuộc cần trạng thái kết thúc rõ ràng và lịch VPF khớp, hoặc bản dữ liệu chính thức đã xác minh. Nếu trang trận không ghi rõ trạng thái, UI giữ kết quả đã kiểm chứng hoặc hiển thị trạng thái cập nhật gần nhất.
 
 ## Vận hành
 
 - Hai workflow dùng chung khóa triển khai và cùng phục vụ dữ liệu ở `open-beta-data/data/live`. Lượt tin tức cũng mang theo phần ngày thi đấu để trang công khai không bị lùi phiên bản.
 - Lịch GitHub Actions kiểm tra 5 phút một lượt, ưu tiên lệch đầu giờ. GitHub có thể xếp hàng hoặc trì hoãn lịch. Lượt theo lịch bỏ qua triển khai khi chỉ mục công khai đã trùng với bản xác minh. Khi không đọc được VPF, xem mã HTTP trong log. Lỗi nguồn giữ dữ liệu đã xác minh.
-- Có thể chạy bộ thu từ máy Linux được phép đọc VPF. Chuẩn bị Python, lxml, Node, curl, Tesseract và dữ liệu `updates.json` hiện hành trong thư mục trạng thái.
+- Nếu runner mặc định bị VPF từ chối, đặt biến repository `VPF_MATCHDAY_RUNNER` thành nhãn runner Linux đã xác minh truy cập. Có thể chạy bộ thu độc lập trên máy Linux đó. Chuẩn bị Python, lxml, Node, curl, Tesseract và dữ liệu `updates.json` hiện hành trong thư mục trạng thái.
 
 ```bash
 python tools/prepare-app.py

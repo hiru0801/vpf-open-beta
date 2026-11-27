@@ -19,7 +19,7 @@ from vpf_http import fetch
 
 CATEGORIES = {'vl1': 683, 'vl2': 691, 'nc': 687}
 POSITIONS = {'TM': 'Thủ môn', 'HV': 'Hậu vệ', 'TV': 'Tiền vệ', 'TD': 'Tiền đạo'}
-ROW = re.compile(r'^\s*(\d{1,2})[.\s]+(TM|HV|TV|TD)[._\s]+(\d{1,3})[._\s]+(.+?)\s+(?:19|20)\d{2}\b')
+ROW = re.compile(r'^\s*(\d{1,2})[._\s]+(TM|HV|TV|TD)[._\s]+(\d{1,3})[._\s]+(.+?)\s+(?:19|20)\d{2}\b')
 
 
 def fold(value):

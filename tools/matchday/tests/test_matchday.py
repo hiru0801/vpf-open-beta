@@ -68,7 +68,7 @@ class MatchDayTest(TestCase):
             self.assertEqual(detail['lineup'][0]['kind'],'registration')
 
     def test_wrong_number_or_skipped_row_does_not_publish(self):
-        lines = [registration.ROW.match(f'{i} {"TM" if i==1 else "HV"} {i} Cau Thu {i} 2000')
+        lines = [registration.ROW.match(f'{i}_ {"TM" if i==1 else "HV"}__{i} Cau Thu {i} 2000')
                  for i in range(1,17)]
         players = [{'number':i,'name':f'Cau Thu {i}'} for i in range(1,17)]
         result = registration.roster_rows(lines,players,16)
