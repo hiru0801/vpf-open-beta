@@ -564,7 +564,7 @@ jobs:
           +
            print('PASS · đổi giờ/sân, hoãn, dữ liệu trống, đối chiếu bàn cũ và hàng chờ xác minh.')
           VPF_PATCH
-      - run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - run: python -m pip install --disable-pip-version-check -r requirements.txt fonttools==4.57.0
       - name: Restore the last verified release
         shell: bash
         run: |
