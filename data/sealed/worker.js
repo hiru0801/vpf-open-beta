@@ -1,13 +1,13 @@
 'use strict';
 
 // Release paths are immutable. Keep the immediately previous shell available during updates.
-const releaseId='5a303d52d40a58aa6833f322';
-const revision=Number('23');
+const releaseId='0412e0db5d8566d38401e273';
+const revision=Number('24');
 const prefix='vpf-app-'+new URL('./',self.location.href).pathname+':';
 const cacheName=prefix+releaseId;
 const root='releases/'+releaseId+'/';
 const shell=['index.html',...['index-data.js','app.js','theme.js','styles.css','data-update.js','calendar.js',
-  'match-view.js','competition-view.js','web-data.js','news-view.js','news-snapshot.js',
+  'match-view.js','competition-view.js','web-data.js','live-view.js','news-view.js','news-snapshot.js',
   'assets/InterVariable.woff2','assets/vl1.webp','assets/vl2.webp','assets/nc.webp',
   'assets/app-180.png','assets/app-192.png','assets/app-512.png'].map(file=>root+file)];
 const scope=new URL('./',self.location.href);
