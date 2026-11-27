@@ -21,7 +21,9 @@ jobs:
     permissions:
       contents: write
     outputs:
-      sync_result: ${{ steps.sync.outputs.sync_result }}
+      vpf_ok: ${{ steps.sync.outputs.vpf_ok }}
+      news_ok: ${{ steps.sync.outputs.news_ok }}
+      vpf_error: ${{ steps.sync.outputs.vpf_error }}
       news_hash: ${{ steps.sync.outputs.news_hash }}
       data_hash: ${{ steps.sync.outputs.data_hash }}
     steps:
@@ -38,6 +40,152 @@ jobs:
           set -euo pipefail
           printf '%s  vpf-bundle.zip\n' 'e6e7198cde9b4bef3c81112d044b008b73671ff5eaff6000315966c7ac85ca70' | sha256sum -c
           unzip -q vpf-bundle.zip
+          git apply <<'VPF_PATCH'
+          --- /dev/null
+          +++ b/app/tools/vpf_http.py
+          @@ -0,0 +1,27 @@
+          +"""Read official VPF pages with bounded retries and log the real HTTP status."""
+          +
+          +from pathlib import Path
+          +import re
+          +import subprocess
+          +from tempfile import TemporaryDirectory
+          +from urllib.parse import urlsplit
+          +
+          +
+          +def fetch(url):
+          +    target = urlsplit(url)
+          +    if target.scheme != 'https' or target.netloc != 'vpf.vn':
+          +        raise ValueError('URL nguồn phải thuộc https://vpf.vn.')
+          +    with TemporaryDirectory(prefix='vpf-http-') as temp:
+          +        body = Path(temp)/'body'
+          +        headers = Path(temp)/'headers'
+          +        result = subprocess.run([
+          +            'curl', '-fsS', '--proto', '=https', '--connect-timeout', '8', '--max-time', '20',
+          +            '--retry', '2', '--retry-max-time', '45',
+          +            '--dump-header', str(headers), '--output', str(body), '--write-out', '%{response_code}', url,
+          +        ], capture_output=True, text=True)
+          +        status = result.stdout.strip()
+          +        if result.returncode or status != '200':
+          +            status = 'HTTP '+status if status.isdigit() and status != '000' else 'lỗi kết nối'
+          +            raise OSError(f'VPF {status} (curl {result.returncode}) · {url}')
+          +        final_headers = re.split(rb'\r?\n\r?\n',headers.read_bytes().rstrip(b'\r\n'))[-1]
+          +        return body.read_bytes(), final_headers
+          --- a/app/tools/import-vpf.py
+          +++ b/app/tools/import-vpf.py
+          @@ -14,6 +14,7 @@
+           
+           from lxml import html
+           from vpf_clubs import player_id
+          +from vpf_http import fetch
+           
+           APP = Path(__file__).resolve().parents[1]
+           CALENDAR = 'https://vpf.vn/season/v-league-2027/?action=calendar'
+          @@ -148,12 +149,9 @@
+               filename = cache / name
+               if filename.is_file():
+                   return html.fromstring(filename.read_text(encoding='utf-8'))
+          -    result = subprocess.run(
+          -        ['curl','-fsS','--max-time','20','--proto','=https',url],
+          -        check=True, capture_output=True, text=True, encoding='utf-8',
+          -    )
+          -    page = html.fromstring(result.stdout)
+          -    filename.write_text(result.stdout, encoding='utf-8')
+          +    data,_ = fetch(url)
+          +    page = html.fromstring(data.decode('utf-8'))
+          +    filename.write_bytes(data)
+               return page
+           
+           
+          --- a/app/tools/vpf_highlights.py
+          +++ b/app/tools/vpf_highlights.py
+          @@ -9,6 +9,8 @@
+           import subprocess
+           import unicodedata
+           from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
+          +
+          +from vpf_http import fetch
+           
+           ROOT = 'https://vpf.vn/category/video-highlight/'
+           API = 'https://vpf.vn/wp-json/wp/v2/posts'
+          @@ -69,9 +71,7 @@
+                   else:
+                       params=dict(categories=VIDEO_CATEGORIES,after=cutoff.isoformat()+'T00:00:00',per_page=100,page=page,
+                                   _fields='date,title,link')
+          -            result=subprocess.run(['curl','-fsS','--max-time','20','--proto','=https','-D','-',
+          -                                   API+'?'+urlencode(params)],check=True,capture_output=True)
+          -            headers,_,body=result.stdout.rpartition(b'\r\n\r\n')
+          +            body,headers=fetch(API+'?'+urlencode(params))
+                       pages=re.search(rb'(?im)^x-wp-totalpages:\s*(\d+)',headers)
+                       if not pages:
+                           raise ValueError('Nguồn video VPF thiếu số trang.')
+          --- a/app/tools/sync-pages.py
+          +++ b/app/tools/sync-pages.py
+          @@ -3,6 +3,7 @@
+           import argparse
+           import json
+           from pathlib import Path
+          +import re
+           import runpy
+           import shutil
+           import subprocess
+          @@ -19,6 +20,13 @@
+           def copy_immutable_assets(source, target):
+               for directory in (source/'releases').iterdir():
+                   shutil.copytree(directory, target/directory.name)
+          +
+          +
+          +def retry_hours(health):
+          +    # Keep access-denied and missing endpoints on the normal check cadence.
+          +    if health.get('status')!='ok' and not re.match(r'VPF HTTP (401|403|404)\b',health.get('error','')):
+          +        return 10/60
+          +    return 55/60
+           
+           
+           def run(state, output, seed, force_vpf):
+          @@ -49,7 +57,7 @@
+               health_path = work/'sync-status.json'
+               health = read(health_path) if health_path.exists() else {}
+               vpf_error = False
+          -    if force_vpf or expires(health.get('startedAt'),now(),55/60):
+          +    if force_vpf or expires(health.get('startedAt'),now(),retry_hours(health)):
+                   draft = work/'draft.json'
+                   draft.unlink(missing_ok=True)
+                   vpf_error = command(sys.executable,'tools/sync-vpf.py','--state',str(work),check=False)
+          @@ -91,8 +99,18 @@
+               # This manifest authenticates the sealed bundle in the checkpoint. The
+               # published tree additionally contains mutable status, news and old assets.
+               (output/'release-files.json').unlink()
+          -    print(json.dumps({'news_ok':not news_error,'vpf_ok':not vpf_error}))
+          -    return not (news_error or vpf_error)
+          +    published = read(status)
+          +    latest_check = published.get('lastSuccessfulCheckAt')
+          +    latest_video_check = published.get('lastHighlightCheckAt')
+          +    vpf_ok = (not vpf_error and published.get('mode')=='sync' and published.get('state')=='ok'
+          +              and not expires(latest_check,now(),3) and not expires(latest_video_check,now(),3))
+          +    result = {'news_ok':not news_error,'vpf_ok':vpf_ok}
+          +    if not vpf_ok and health_path.exists():
+          +        error = read(health_path).get('error')
+          +        if error:
+          +            result['vpf_error'] = error
+          +    print(json.dumps(result,ensure_ascii=False))
+          +    return result
+           
+           
+           if __name__=='__main__':
+          @@ -101,6 +119,9 @@
+               parser.add_argument('--seed',type=Path,required=True)
+               parser.add_argument('--output',type=Path,required=True)
+               parser.add_argument('--force-vpf',action='store_true')
+          +    parser.add_argument('--summary',type=Path)
+               args=parser.parse_args()
+          -    ok=run(args.state.resolve(),args.output.resolve(),args.seed.resolve(),args.force_vpf)
+          -    raise SystemExit(0 if ok else 2)
+          +    result=run(args.state.resolve(),args.output.resolve(),args.seed.resolve(),args.force_vpf)
+          +    if args.summary:
+          +        args.summary.write_text(json.dumps(result,ensure_ascii=False)+'\n',encoding='utf-8')
+          +    raise SystemExit(0 if result['news_ok'] and result['vpf_ok'] else 2)
+          VPF_PATCH
       - run: python -m pip install --disable-pip-version-check -r requirements.txt
       - name: Restore the last verified release
         shell: bash
@@ -61,14 +209,18 @@ jobs:
         run: |
           set -euo pipefail
           flags=()
-          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then flags+=(--force-vpf); fi
+          if [[ "$EVENT_NAME" != schedule ]]; then flags+=(--force-vpf); fi
           result=0
           python app/tools/sync-pages.py \
             --state "$RUNNER_TEMP/vpf-checkpoint/data" \
             --seed "$GITHUB_WORKSPACE/seed-web" \
-            --output "$RUNNER_TEMP/vpf-web" "${flags[@]}" || result=$?
+            --output "$RUNNER_TEMP/vpf-web" \
+            --summary "$RUNNER_TEMP/vpf-sync-summary.json" "${flags[@]}" || result=$?
           if [[ "$result" != 0 && "$result" != 2 ]]; then exit "$result"; fi
-          printf 'sync_result=%s\n' "$result" >> "$GITHUB_OUTPUT"
+          summary="$RUNNER_TEMP/vpf-sync-summary.json"
+          printf 'vpf_ok=%s\n' "$(jq -r '.vpf_ok' "$summary")" >> "$GITHUB_OUTPUT"
+          printf 'news_ok=%s\n' "$(jq -r '.news_ok' "$summary")" >> "$GITHUB_OUTPUT"
+          printf 'vpf_error=%s\n' "$(jq -r '(.vpf_error // "") | gsub("[\\r\\n]"; " ")' "$summary")" >> "$GITHUB_OUTPUT"
           printf 'news_hash=%s\n' "$(sha256sum "$RUNNER_TEMP/vpf-web/news-feed.json" | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
           printf 'data_hash=%s\n' "$(sha256sum "$RUNNER_TEMP/vpf-web/data-status.json" | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
       - name: Save verified state
@@ -104,7 +256,6 @@ jobs:
         shell: bash
         env:
           SITE_URL: ${{ steps.release.outputs.page_url }}
-          SYNC_RESULT: ${{ needs.sync.outputs.sync_result }}
           NEWS_HASH: ${{ needs.sync.outputs.news_hash }}
           DATA_HASH: ${{ needs.sync.outputs.data_hash }}
         run: |
@@ -117,10 +268,34 @@ jobs:
           curl -fsS --retry 3 --max-time 20 "$root/data-status.json?$stamp" -o data-status.json
           printf '%s  news-feed.json\n%s  data-status.json\n' "$NEWS_HASH" "$DATA_HASH" | sha256sum -c
           jq -e '.articles | length > 0' news-feed.json
-          jq -e '.schema == 1' data-status.json
-          if [[ "$SYNC_RESULT" != 0 ]]; then
-            echo '::error::Nguồn tin hoặc dữ liệu VPF bị gián đoạn. Site đang giữ dữ liệu đã xác minh.'
+          jq -e '.schema == 1 and (.mode == "sync" or .mode == "snapshot")' data-status.json
+
+  source-health:
+    needs: [sync, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions: {}
+    steps:
+      - name: Check the official VPF source
+        shell: bash
+        env:
+          VPF_OK: ${{ needs.sync.outputs.vpf_ok }}
+          VPF_ERROR: ${{ needs.sync.outputs.vpf_error }}
+        run: |
+          if [[ "$VPF_OK" != true ]]; then
+            printf '%s\n' "$VPF_ERROR"
+            echo '::error::Chưa xác nhận được lịch, kết quả và kho video từ VPF.'
             exit 1
           fi
-          jq -e '.mode == "sync" and (.sources | length == 6 and all(.status == "ok"))' news-feed.json
-          jq -e '.mode == "sync" and .state == "ok"' data-status.json
+          echo 'Đã xác minh nguồn VPF trong thời hạn.'
+      - name: Check the six news publishers
+        if: always()
+        shell: bash
+        env:
+          NEWS_OK: ${{ needs.sync.outputs.news_ok }}
+        run: |
+          if [[ "$NEWS_OK" != true ]]; then
+            echo '::error::Một hoặc nhiều nguồn tin chưa cập nhật được.'
+            exit 1
+          fi
+          echo 'Đã cập nhật cả sáu nguồn tin.'
