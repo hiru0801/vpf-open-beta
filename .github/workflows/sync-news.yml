@@ -1,0 +1,145 @@
+name: VPF News Sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/10 * * * *'
+
+concurrency:
+  group: vpf-open-beta
+  cancel-in-progress: false
+
+jobs:
+  sync-news:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: write
+    outputs:
+      news_ok: ${{ steps.sync.outputs.news_ok }}
+      news_hash: ${{ steps.sync.outputs.news_hash }}
+      data_hash: ${{ steps.sync.outputs.data_hash }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Verify and unpack the application
+        shell: bash
+        run: |
+          echo "e6e7198cde9b4bef3c81112d044b008b73671ff5eaff6000315966c7ac85ca70  vpf-bundle.zip" | sha256sum -c -
+          unzip -q vpf-bundle.zip
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          lines = Path('.github/workflows/open-beta.yml').read_text(encoding='utf-8').splitlines(True)
+          start = next(i for i, l in enumerate(lines) if "git apply <<'VPF_PATCH'" in l)
+          end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'VPF_PATCH')
+          indent = len(lines[end]) - len(lines[end].lstrip(' '))
+          patch = ''.join(l[indent:] if l.startswith(' ' * indent) else l for l in lines[start + 1:end])
+          subprocess.run(['git', 'apply'], input=patch, text=True, check=True)
+          PY
+
+      - name: Install Python dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt fonttools==4.57.0
+
+      - name: Restore the last verified release
+        shell: bash
+        run: |
+          git fetch origin refs/heads/open-beta-data
+          git worktree add --detach "$RUNNER_TEMP/vpf-checkpoint" FETCH_HEAD
+
+      - name: Sync six news sources only
+        id: sync
+        shell: bash
+        run: |
+          set +e
+          flags=()
+          if [ -f "$GITHUB_WORKSPACE/vpf-sync-input.json" ]; then
+            flags+=(--delivery "$GITHUB_WORKSPACE/vpf-sync-input.json")
+          fi
+          python app/tools/sync-pages.py \
+            --state "$RUNNER_TEMP/vpf-checkpoint/data" \
+            --seed "$GITHUB_WORKSPACE/seed-web" \
+            --output "$RUNNER_TEMP/vpf-web" \
+            --summary "$RUNNER_TEMP/vpf-sync-summary.json" \
+            "${flags[@]}"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then exit "$rc"; fi
+          news_ok=$(jq -r '.news_ok // false' "$RUNNER_TEMP/vpf-sync-summary.json")
+          news_hash=$(sha256sum "$RUNNER_TEMP/vpf-web/news-feed.json" | awk '{print $1}')
+          data_hash=$(sha256sum "$RUNNER_TEMP/vpf-web/data-status.json" | awk '{print $1}')
+          {
+            echo "news_ok=$news_ok"
+            echo "news_hash=$news_hash"
+            echo "data_hash=$data_hash"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Save verified news checkpoint
+        shell: bash
+        working-directory: ${{ runner.temp }}/vpf-checkpoint
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- data/news-feed.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Update verified news feed"
+            git push origin HEAD:refs/heads/open-beta-data
+          fi
+
+      - name: Stage the public website
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: ${{ runner.temp }}/vpf-web
+
+  publish:
+    needs: sync-news
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.release.outputs.page_url }}
+    steps:
+      - id: release
+        uses: actions/deploy-pages@v4
+      - name: Verify published news-feed.json and data-status.json
+        shell: bash
+        env:
+          SITE_URL: ${{ steps.release.outputs.page_url }}
+          NEWS_HASH: ${{ needs.sync-news.outputs.news_hash }}
+          DATA_HASH: ${{ needs.sync-news.outputs.data_hash }}
+        run: |
+          stamp="t=$(date +%s)"
+          root="${SITE_URL%/}"
+          curl -fsSL "$root/news-feed.json?$stamp" -o /tmp/news.json
+          curl -fsSL "$root/data-status.json?$stamp" -o /tmp/data.json
+          [ "$(sha256sum /tmp/news.json | awk '{print $1}')" = "$NEWS_HASH" ]
+          [ "$(sha256sum /tmp/data.json | awk '{print $1}')" = "$DATA_HASH" ]
+          jq -e '.articles | length > 0' /tmp/news.json >/dev/null
+          jq -e '.schema == 1 and (.mode == "sync" or .mode == "snapshot")' /tmp/data.json >/dev/null
+
+  news-health:
+    needs: [sync-news, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions: {}
+    steps:
+      - name: Check the six news publishers
+        shell: bash
+        env:
+          NEWS_OK: ${{ needs.sync-news.outputs.news_ok }}
+        run: |
+          if [ "$NEWS_OK" != "true" ]; then
+            echo "::error::Một hoặc nhiều nguồn tin chưa cập nhật được."
+            exit 1
+          fi
+          echo "Đã cập nhật cả sáu nguồn tin."
