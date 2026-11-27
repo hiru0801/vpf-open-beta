@@ -1,1 +1,8 @@
-{"schema":1,"mode":"snapshot"}
+{
+  "schema": 1,
+  "mode": "sync",
+  "state": "ok",
+  "lastSuccessfulCheckAt": "2026-11-27T14:17:22.396+07:00",
+  "lastHighlightCheckAt": "2026-11-27T14:17:22.396+07:00",
+  "pendingReview": 3
+}
