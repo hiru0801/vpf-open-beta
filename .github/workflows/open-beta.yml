@@ -636,6 +636,174 @@ jobs:
                    if (!next) throw Error('Bản tin không hợp lệ');
                  } catch { newsFailed=true; }
                }
+          diff --git a/app/tools/check-news.py b/app/tools/check-news.py
+          index 084725b..ca8debf 100644
+          --- a/app/tools/check-news.py
+          +++ b/app/tools/check-news.py
+          @@ -1,6 +1,7 @@
+           """Regression checks for the fixed sources, classification and partial failures."""
+           from collections import Counter
+           from datetime import datetime
+          +from http.client import InvalidURL
+           import json
+           from pathlib import Path
+           import runpy
+          @@ -22,6 +23,8 @@ assert classify('U17 Việt Nam đặt mục tiêu dự World Cup và đá V.Lea
+           assert classify('CLB CAHN gặp Vissel Kobe ở Cúp C1 châu Á')==([],[])
+           assert classify('Hạng nhất Anh: Derby County thắng trận')==([],[])
+           assert not tool['article_url']('vtc','https://evil.example/lich-ar100.html','https://vtcnews.vn')
+          +assert not tool['article_url']('bongdaplus','https://[broken/','https://bongdaplus.vn')
+          +assert not tool['article_url']('bongdaplus','/v-league/tin\n-123.html','https://bongdaplus.vn')
+           assert tool['parse_date']('29/11/2026 - 19:15').hour==19
+           assert tool['parse_date']('32/11/2026 - 19:15') is None
+           assert tool['parse_date']('Fri, 27 Nov 2026 04:00:00 +0000').hour==11
+          @@ -70,4 +73,38 @@ with TemporaryDirectory() as tmp:
+               assert not tool['run'](p,None,now)
+               kept=json.loads(p.read_text())
+               assert kept['articles']==previous['articles'] and kept['sources']['znews']['status']=='unavailable'
+          -print('PASS · lọc nguồn, lịch đăng, giải/CLB, giữ tin khi nguồn lỗi.')
+          +
+          +section='https://bongdaplus.vn/v-league'
+          +raw_path='/v-league/Ket-qua-slna-vs-ninh-binh-noi-dai-mach-thang-hoa -5286002611.html'
+          +canonical='https://bongdaplus.vn'+raw_path.replace(' ','%20')
+          +unreadable='https://bongdaplus.vn/v-league/loi-doc-123.html'
+          +logic['SOURCES']=(('bongdaplus',section,'vl1'),)
+          +requested=[]
+          +
+          +def fetch_with_bad_article(address, cache):
+          +    requested.append(address)
+          +    if address==section:
+          +        return (f'<a class="title" href="{unreadable}">Tin V.League không đọc được</a>'
+          +                f'<a class="title" href="{raw_path}">Kết quả SLNA vs Ninh Bình</a>'
+          +                f'<a class="title" href="{canonical}?ref=section">Kết quả SLNA vs Ninh Bình</a>').encode()
+          +    if address==unreadable:
+          +        raise InvalidURL('URL chuyển hướng không hợp lệ')
+          +    assert address==canonical, address
+          +    return detail.encode()
+          +
+          +logic['fetch']=fetch_with_bad_article
+          +with TemporaryDirectory() as tmp:
+          +    p=Path(tmp)/'news-feed.json'
+          +    assert tool['run'](p,None,now)
+          +    feed=json.loads(p.read_text())
+          +    assert [a['url'] for a in feed['articles']]==[canonical]
+          +    assert requested.count(canonical)==1 and unreadable in requested
+          +    assert feed['sources']['bongdaplus']['status']=='ok'
+          +
+          +    feed['articles'][0]['url']='https://bongdaplus.vn'+raw_path
+          +    p.write_text(json.dumps(feed))
+          +    requested.clear()
+          +    assert tool['run'](p,None,now)
+          +    assert [a['url'] for a in json.loads(p.read_text())['articles']]==[canonical]
+          +    assert canonical not in requested
+          +print('PASS · lọc nguồn, lịch đăng, giải/CLB, giữ tin khi nguồn lỗi và cô lập lỗi URL từng bài.')
+          diff --git a/app/tools/sync-news.py b/app/tools/sync-news.py
+          index af6921e..9d723ae 100644
+          --- a/app/tools/sync-news.py
+          +++ b/app/tools/sync-news.py
+          @@ -6,6 +6,7 @@ import argparse
+           import gzip
+           from html import unescape
+           import hashlib
+          +from http.client import HTTPException
+           from io import BytesIO
+           import json
+           import os
+          @@ -15,7 +16,7 @@ import subprocess
+           from tempfile import NamedTemporaryFile
+           from time import sleep
+           import unicodedata
+          -from urllib.parse import urljoin, urlsplit, urlunsplit
+          +from urllib.parse import quote, urljoin, urlsplit, urlunsplit
+           from urllib.error import HTTPError, URLError
+           from urllib.request import HTTPRedirectHandler, Request, build_opener
+           from zoneinfo import ZoneInfo
+          @@ -118,14 +119,19 @@ def classify(title, context, section, clubs, patterns):
+           
+           
+           def article_url(source, value, base):
+          -    if not value:
+          +    if not value or re.search(r'[\x00-\x1f\x7f]',value):
+          +        return None
+          +    try:
+          +        url = urlsplit(urljoin(base,value))
+          +    except ValueError:
+                   return None
+          -    url = urlsplit(urljoin(base,value))
+               if url.scheme!='https' or url.netloc not in HOSTS[source] or not re.fullmatch(ARTICLE_PATH[source],url.path):
+                   return None
+               if source=='vff' and ('/chuyen-muc/' in url.path or url.path.startswith(('/wp-', '/tag/'))):
+                   return None
+          -    return urlunsplit(('https',url.netloc,url.path,'',''))
+          +    # Preserve existing escapes so encoded and unencoded links share the same key.
+          +    path = quote(url.path,safe="/%:@!$&'()*+,;=")
+          +    return urlunsplit(('https',url.netloc,path,'',''))
+           
+           
+           class SourceRedirect(HTTPRedirectHandler):
+          @@ -236,8 +242,16 @@ def run(path, cache, now):
+               patterns = club_patterns(clubs)
+               old = json.loads(path.read_text()) if path.exists() else {}
+               publishers={name for name,_,_ in SOURCES}
+          -    items = {row['url']:row for row in old.get('articles',[]) if row.get('source') in publishers
+          -             and (published:=parse_date(row['publishedAt'])) and now-AGE<=published<=now+timedelta(minutes=5)}
+          +    items = {}
+          +    for row in old.get('articles',[]):
+          +        if row.get('source') not in publishers:
+          +            continue
+          +        published = parse_date(row['publishedAt'])
+          +        if not published or not now-AGE<=published<=now+timedelta(minutes=5):
+          +            continue
+          +        link = article_url(row['source'],row['url'],row['url'])
+          +        if link:
+          +            items[link] = {**row,'url':link}
+               checks = {name:state for name,state in old.get('sources',{}).items() if name in publishers}
+               section_checks = {}
+           
+          @@ -246,11 +260,12 @@ def run(path, cache, now):
+                   try:
+                       rows = list(listing(source,url,fetch(url,cache)))
+                       return config,rows,None
+          -        except (OSError,ValueError,etree.LxmlError) as error:
+          +        except (OSError,ValueError,HTTPException,etree.LxmlError) as error:
+                       return config,[],str(error)
+           
+               pending = {}
+               results = {}
+          +    sources_with_cached_articles = set()
+               with ThreadPoolExecutor(max_workers=8) as pool:
+                   for (source,url,section),rows,error in pool.map(scan,SOURCES):
+                       results.setdefault(source,[]).append(error)
+          @@ -270,7 +285,10 @@ def run(path, cache, now):
+                           if not 8<=len(title)<=270 or not leagues or len(accepted)>=MAX_PER_SECTION:
+                               continue
+                           accepted.add(link)
+          -                if link in items or link in pending:
+          +                if link in items:
+          +                    sources_with_cached_articles.add(source)
+          +                    continue
+          +                if link in pending:
+                               continue
+                           pending[link]=(source,title,leagues,ids,article_section,raw_date)
+                       section_checks[url]={'publisher':source,'found':len(accepted),'status':'unavailable' if error else 'ok'}
+          @@ -286,7 +304,7 @@ def run(path, cache, now):
+                                   return link,None
+                               leagues = list(dict.fromkeys([*leagues,*proposed]))
+                               ids = list(dict.fromkeys([*ids,*teams]))
+          -                except (OSError,ValueError,etree.LxmlError):
+          +                except (OSError,ValueError,HTTPException,etree.LxmlError):
+                               return link,None
+                       if not mark or not now-AGE<=mark<=now+timedelta(minutes=5):
+                           return link,None
+          @@ -301,7 +319,7 @@ def run(path, cache, now):
+           
+               for source,errors in results.items():
+                   attempted,parsed=detail_counts[source]
+          -        if any(error is None for error in errors) and (not attempted or parsed):
+          +        if any(error is None for error in errors) and (not attempted or parsed or source in sources_with_cached_articles):
+                       checks[source]={'status':'ok' if not any(errors) else 'partial','checkedAt':now.isoformat(timespec='seconds')}
+                   else:
+                       checks[source]={**checks.get(source,{}),'status':'unavailable'}
           VPF_PATCH
       - run: python -m pip install --disable-pip-version-check -r requirements.txt fonttools==4.57.0
       - name: Restore the last verified release
