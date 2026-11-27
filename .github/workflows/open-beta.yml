@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/open-beta.yml
       - vpf-bundle.zip
+      - vpf-sync-input.json
   workflow_dispatch:
   schedule:
     - cron: '2-57/5 * * * *'
@@ -41,6 +42,85 @@ jobs:
           printf '%s  vpf-bundle.zip\n' 'e6e7198cde9b4bef3c81112d044b008b73671ff5eaff6000315966c7ac85ca70' | sha256sum -c
           unzip -q vpf-bundle.zip
           git apply <<'VPF_PATCH'
+          --- a/app/app.js
+          +++ b/app/app.js
+          @@ -74,7 +74,8 @@
+             }];
+           }));
+           let clubQuery = '';
+          -let followingPanel = 'teams';
+          +const followedViewReload=history.state?.followedViewReload;
+          +let followingPanel = followedViewReload?.panel==='saved'?'saved':'teams';
+           
+           const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+           const safeUrl = value => typeof value === 'string' && value.startsWith('https://') ? escapeHtml(value) : '';
+          @@ -434,9 +435,9 @@
+             const today=todayVN();
+             const now=Date.now();
+             const next=rows.filter(m=>!m.score && m.status!=='postponed' && sortDay(m)!=='9999' &&
+          -    (m.date || m.window?.[1] || m.month+'-31')>=today &&
+          -    !(m.date===today && m.time && matchStart(m)<=now)).sort(ordered);
+          -  const recent=rows.filter(m=>m.score).sort((a,b)=>ordered(b,a));
+          +    ((m.date || m.window?.[1] || m.month+'-31')>=today ||
+          +     (m.time && matchStart(m)>=now-24*60*60000))).sort(ordered);
+          +  const recent=rows.filter(m=>m.status==='final' && m.score).sort((a,b)=>ordered(b,a));
+             return {next:next.slice(0,followingMatchLimit),recent:recent.slice(0,followingMatchLimit)};
+           }
+           function followedClubPicker(ids,selected) {
+          @@ -1023,6 +1024,20 @@
+           if (!data.clubStats) data.clubStats=window.VPF_UPDATES.clubStatTables(leagues,ties,matches);
+           if (!data.scorers) data.scorers=window.VPF_UPDATES.scorerTables(ties,matches,data.rosters);
+           applyRoute();
+          +if (followedViewReload) {
+          +  const {followedViewReload: view, ...rest}=history.state;
+          +  history.replaceState(rest,'');
+          +  if (state.tab==='following' && !state.match) {
+          +    const savedList=byId('saved-matches');
+          +    if (savedList) savedList.scrollTop=view.savedScroll;
+          +    if (view.focus) {
+          +      const controls=content.querySelectorAll('button, a');
+          +      const focused=[...controls].find(control=>view.focus===controlKey(control,content));
+          +      (focused||content).focus({preventScroll:true});
+          +    }
+          +    window.scrollTo(0,view.scroll);
+          +  }
+          +}
+           if (hosted) {
+             if (webRelease && window.isSecureContext && 'serviceWorker' in navigator) {
+               navigator.serviceWorker.register('worker.js',{updateViaCache:'none'}).catch(()=>{ /* Online mode remains available. */ });
+          --- a/app/web-data.js
+          +++ b/app/web-data.js
+          @@ -85,7 +85,7 @@
+             refreshing=true;
+             renderFeedStatus();
+             try {
+          -    const latest=await fetchWithDeadline('release-info.json',{cache:manual?'no-cache':undefined});
+          +    const latest=await fetchWithDeadline('release-info.json',{cache:'no-cache'});
+               if (latest.season!==webRelease.season || !Number.isSafeInteger(latest.revision) ||
+                   latest.revision<1 || !/^[a-f0-9]{24}$/.test(latest.releaseId)) throw Error('Phiên bản sai.');
+               if (latest.revision<webRelease.revision && !manual) {
+          @@ -97,7 +97,8 @@
+               lastVerified=new Date();
+               feedStatus=changed?'Có bản mới · Bấm Kiểm tra cập nhật để mở':'';
+               const watching=matches[state.match];
+          -    const canRefresh=!dialog.open && Boolean(watching?.score && !watching.highlightUrl);
+          +    const watchingFollowed=state.tab==='following' && !state.match && !state.missingMatch;
+          +    const canRefresh=!dialog.open && (watchingFollowed || Boolean(watching && (!watching.score || !watching.highlightUrl)));
+               if (changed && (manual || canRefresh)) {
+                 const key='vpf-auto-release:'+latest.releaseId;
+                 let autoReload=manual;
+          @@ -107,6 +108,11 @@
+                 if (autoReload) {
+                   const next=await fetchWithDeadline('index.html',{cache:'reload',read:'text'});
+                   if (next.includes('releases/'+latest.releaseId+'/index-data.js')) {
+          +          if (watchingFollowed) {
+          +            const view={panel:followingPanel,scroll:window.scrollY,savedScroll:byId('saved-matches')?.scrollTop||0,
+          +              focus:controlKey(document.activeElement,content)};
+          +            history.replaceState({...history.state,followedViewReload:view},'');
+          +          }
+                     try { sessionStorage.setItem(key,'1'); } catch { /* Manual reload still works. */ }
+                     location.reload();
+                   }
           --- /dev/null
           +++ b/app/tools/vpf_http.py
           @@ -0,0 +1,27 @@
@@ -97,6 +177,93 @@ jobs:
                return page
            
            
+          --- a/app/tools/backfill-vpf.py
+          +++ b/app/tools/backfill-vpf.py
+          @@ -40,7 +40,7 @@
+             m.homeClub=sideId(base.ties,matches,m.home);
+             m.awayClub=sideId(base.ties,matches,m.away);
+           }
+          -console.log(JSON.stringify({...base,matches}));
+          +console.log(JSON.stringify({...base,matches,staleTables:update.staleTables}));
+           """
+               return json.loads(subprocess.check_output(['node','-e',script],cwd=APP,
+                                                        input=json.dumps(candidate).encode() if candidate else b''))
+          @@ -155,6 +155,7 @@
+                   m,row,league_name,sid,calendar=job
+                   day,names,score,url,kickoff,penalties,*_=row
+                   mid=m['id']
+          +        first_result=m.get('score') is None
+                   try:
+                       page=source['cached_page'](url,cache,mid+'.html')
+                       expected={**m,'date':day,'time':kickoff,'score':None,'penalties':penalties}
+          @@ -207,6 +208,7 @@
+           
+                   previous_squads=m.get('matchSquads') or [None,None]
+                   original_ids=set(identity(original))
+          +        incomplete=False
+                   for e in events:
+                       side = 1-e['side'] if e['type']=='ownGoal' else e['side']
+                       squad = squads[side] if squads else None
+          @@ -218,16 +220,22 @@
+                       notes.append(f'{e["name"]} ({e["minute"]}′): chưa khớp danh sách thi đấu.')
+                       prior = identity([e])[0] in original_ids
+                       if scoring and (not prior or bool(squad) and listed(e,previous_squads[side])):
+          -                return None,(mid,dict(source=url,pendingReview=True,issues=notes))
+          +                if not first_result:
+          +                    return None,(mid,dict(source=url,pendingReview=True,issues=notes))
+          +                incomplete=True
+                   counts = dict(source=url,events=len(events),goals=[goals[0],goals[1]],score=score,
+                                 starters=[len(t['starters']) if t else 0 for t in squads],
+                                 substitutes=[len(t['substitutes']) if t else 0 for t in squads],issues=notes)
+                   if pending_review:
+                       counts['pendingReview'] = True
+          -        if [goals[0],goals[1]]!=score:
+          +        if incomplete or [goals[0],goals[1]]!=score:
+                       counts['pendingReview'] = True
+          -            notes.append('Chờ duyệt: số bàn trong diễn biến chưa khớp tỷ số.')
+          -            return None,(mid,counts)
+          +            notes.append('Chờ xác minh diễn biến và người ghi bàn.')
+          +            if not first_result:
+          +                return None,(mid,counts)
+          +            # The calendar and match page already agree on the score. Publish that
+          +            # result and wait for verified events before populating the timeline.
+          +            patch.pop('events',None)
+                   if not any(value!=m.get(key) for key,value in patch.items()):
+                       return None,(mid,counts)
+                   verified=['date','score']+[key for key in ('time','penalties') if key in patch]
+          @@ -260,15 +268,26 @@
+                                   roster[field]=previous[field]
+                           if {f:v for f,v in roster.items() if f!='at'}!={f:v for f,v in previous.items() if f!='at'}:
+                               rosters[key]=roster
+          -    if not entries and rosters==feed.get('rosters',{}):
+          -        return None,reports
+               standings=dict(feed.get('standings',{}))
+               updated_ids={item['id'] for item in entries if 'score' in item['patch'] and
+                            data['matches'][item['id']].get('score')!=item['patch']['score']}
+          -    for league in {data['matches'][mid]['league'] for mid in updated_ids}-{'nc'}:
+          -        standings[league]=official_standings(cache,data,league,now,standings.get(league,{}))
+          -    return {**feed,'revision':feed['revision']+1,'publishedAt':now,
+          -            'matches':feed['matches']+entries,'rosters':rosters,'standings':standings}, reports
+          +    draft={**feed,'revision':feed['revision']+1,'publishedAt':now,
+          +           'matches':feed['matches']+entries,'rosters':rosters,'standings':standings}
+          +    refresh={data['matches'][mid]['league'] for mid in updated_ids}|set(data['staleTables'])
+          +    for league in sorted((refresh&set(selected))-{'nc'}):
+          +        try:
+          +            table=official_standings(cache,data,league,now,standings.get(league,{}))
+          +            candidate={**draft,'standings':{**standings,league:table}}
+          +            validation=subprocess.run(['node','tools/publish.cjs','--check','-'],cwd=APP,
+          +                                      input=json.dumps(candidate).encode(),capture_output=True)
+          +            if validation.returncode:
+          +                raise ValueError('Bảng VPF chưa khớp bộ kết quả đã xác minh.')
+          +            standings[league]=table
+          +        except (ValueError,OSError,subprocess.CalledProcessError) as error:
+          +            reports['table-'+league]=dict(pendingReview=True,issues=[str(error)])
+          +    if not entries and rosters==feed.get('rosters',{}) and standings==feed.get('standings',{}):
+          +        return None,reports
+          +    return draft,reports
+           
+           
+           def add_highlights(cache, now, candidate=None, recent_days=None):
           --- a/app/tools/vpf_highlights.py
           +++ b/app/tools/vpf_highlights.py
           @@ -9,6 +9,8 @@
@@ -121,38 +288,126 @@ jobs:
                            raise ValueError('Nguồn video VPF thiếu số trang.')
           --- a/app/tools/sync-pages.py
           +++ b/app/tools/sync-pages.py
-          @@ -3,6 +3,7 @@
+          @@ -1,15 +1,18 @@
+           """Refresh the published GitHub Pages bundle and its Git-backed checkpoint."""
+           
            import argparse
+          +from datetime import datetime, timezone
            import json
            from pathlib import Path
           +import re
            import runpy
            import shutil
            import subprocess
-          @@ -19,6 +20,13 @@
-           def copy_immutable_assets(source, target):
-               for directory in (source/'releases').iterdir():
+           import sys
+           from tempfile import TemporaryDirectory
+           
+          -from release_inputs import APP, verify_bundle
+          +from release_inputs import APP, input_hash, verify_bundle
+          +from vpf_delivery import unpack
+           
+           
+           def command(*args, check=True):
+          @@ -21,7 +24,14 @@
                    shutil.copytree(directory, target/directory.name)
-          +
-          +
+           
+           
+          -def run(state, output, seed, force_vpf):
           +def retry_hours(health):
           +    # Keep access-denied and missing endpoints on the normal check cadence.
           +    if health.get('status')!='ok' and not re.match(r'VPF HTTP (401|403|404)\b',health.get('error','')):
           +        return 10/60
           +    return 55/60
+          +
+          +
+          +def run(state, output, seed, force_vpf, delivery=None):
+               sync = runpy.run_path(str(APP/'tools/sync-vpf.py'))
+               read, now, public_health = (sync[key] for key in ('read', 'now', 'public_health'))
+               expires = sync['expired']
+          @@ -48,36 +58,59 @@
            
-           
-           def run(state, output, seed, force_vpf):
-          @@ -49,7 +57,7 @@
                health_path = work/'sync-status.json'
                health = read(health_path) if health_path.exists() else {}
+          +    latest_health = health
+          +    work.mkdir(exist_ok=True)
+          +    draft = work/'draft.json'
+          +    draft.unlink(missing_ok=True)
                vpf_error = False
           -    if force_vpf or expires(health.get('startedAt'),now(),55/60):
-          +    if force_vpf or expires(health.get('startedAt'),now(),retry_hours(health)):
-                   draft = work/'draft.json'
-                   draft.unlink(missing_ok=True)
+          -        draft = work/'draft.json'
+          -        draft.unlink(missing_ok=True)
+          +    if delivery:
+          +        try:
+          +            packet = read(delivery)
+          +            if unpack(packet,read(data),health,draft,datetime.now(timezone.utc)):
+          +                latest_health = packet['health']
+          +                public_health(status,latest_health)
+          +                health_path.write_text(json.dumps(latest_health,ensure_ascii=False)+'\n',encoding='utf-8')
+          +        except (OSError,ValueError,KeyError,TypeError,subprocess.CalledProcessError) as error:
+          +            draft.unlink(missing_ok=True)
+          +            latest_health = {**health,'status':'error','error':str(error)}
+          +            vpf_error = True
+          +    elif force_vpf or expires(health.get('startedAt'),now(),retry_hours(health)):
                    vpf_error = command(sys.executable,'tools/sync-vpf.py','--state',str(work),check=False)
-          @@ -91,8 +99,18 @@
+                   latest_health = read(health_path) if health_path.exists() else {**health,'status':'error'}
+                   if not vpf_error:
+          -            if draft.exists():
+          -                with TemporaryDirectory(prefix='new-release-',dir=state) as temp:
+          -                    temp=Path(temp)
+          -                    rebuilt=temp/'web'
+          -                    command(sys.executable,'tools/audit.py','--db',str(temp/'review.sqlite'),'record',str(draft))
+          -                    command(sys.executable,'tools/release.py','--db',str(temp/'review.sqlite'),'--draft',str(draft),'--out',str(rebuilt))
+          -                    command('node','tools/publish.cjs',str(draft))
+          -                    command(sys.executable,'tools/check-release.py',str(rebuilt))
+          -                    if previous_assets.exists():
+          -                        shutil.rmtree(previous_assets)
+          -                    previous_assets.mkdir()
+          -                    copy_immutable_assets(sealed, previous_assets)
+          -                    shutil.rmtree(sealed)
+          -                    rebuilt.rename(sealed)
+          -                    shutil.copyfile(draft,data)
+                       public_health(status,latest_health)
+          -        elif latest_health.get('lastSuccessfulCheckAt'):
+          -            public_health(status,{**latest_health,'status':'error'})
+          -        draft.unlink(missing_ok=True)
+          -        for scratch in ('lock.sqlite','latest-check.json','highlight-check.json'):
+          -            (work/scratch).unlink(missing_ok=True)
+          +        else:
+          +            draft.unlink(missing_ok=True)
+               elif health.get('status')!='ok':
+                   vpf_error=True
+          +
+          +    if vpf_error and latest_health.get('lastSuccessfulCheckAt'):
+          +        public_health(status,{**latest_health,'status':'error'})
+          +    origin = state/'shell-input.txt'
+          +    shell_hash = input_hash()
+          +    if not draft.exists() and (not origin.exists() or origin.read_text().strip()!=shell_hash):
+          +        update = read(data)
+          +        draft.write_text(json.dumps({**update,'revision':update['revision']+1,'publishedAt':now()},
+          +                                    ensure_ascii=False)+'\n',encoding='utf-8')
+          +    if draft.exists():
+          +        with TemporaryDirectory(prefix='new-release-',dir=state) as temp:
+          +            temp=Path(temp)
+          +            rebuilt=temp/'web'
+          +            command(sys.executable,'tools/audit.py','--db',str(temp/'review.sqlite'),'record',str(draft))
+          +            command(sys.executable,'tools/release.py','--db',str(temp/'review.sqlite'),'--draft',str(draft),'--out',str(rebuilt))
+          +            command('node','tools/publish.cjs',str(draft))
+          +            command(sys.executable,'tools/check-release.py',str(rebuilt))
+          +            if previous_assets.exists():
+          +                shutil.rmtree(previous_assets)
+          +            previous_assets.mkdir()
+          +            copy_immutable_assets(sealed, previous_assets)
+          +            shutil.rmtree(sealed)
+          +            rebuilt.rename(sealed)
+          +            shutil.copyfile(draft,data)
+          +            origin.write_text(shell_hash+'\n',encoding='utf-8')
+          +    draft.unlink(missing_ok=True)
+          +    for scratch in ('lock.sqlite','latest-check.json','highlight-check.json'):
+          +        (work/scratch).unlink(missing_ok=True)
+           
+               verify_bundle(sealed)
+               shutil.copytree(sealed,output)
+          @@ -91,8 +124,18 @@
                # This manifest authenticates the sealed bundle in the checkpoint. The
                # published tree additionally contains mutable status, news and old assets.
                (output/'release-files.json').unlink()
@@ -164,8 +419,8 @@ jobs:
           +    vpf_ok = (not vpf_error and published.get('mode')=='sync' and published.get('state')=='ok'
           +              and not expires(latest_check,now(),3) and not expires(latest_video_check,now(),3))
           +    result = {'news_ok':not news_error,'vpf_ok':vpf_ok}
-          +    if not vpf_ok and health_path.exists():
-          +        error = read(health_path).get('error')
+          +    if not vpf_ok:
+          +        error = latest_health.get('error')
           +        if error:
           +            result['vpf_error'] = error
           +    print(json.dumps(result,ensure_ascii=False))
@@ -173,18 +428,141 @@ jobs:
            
            
            if __name__=='__main__':
-          @@ -101,6 +119,9 @@
+          @@ -101,6 +144,10 @@
                parser.add_argument('--seed',type=Path,required=True)
                parser.add_argument('--output',type=Path,required=True)
                parser.add_argument('--force-vpf',action='store_true')
           +    parser.add_argument('--summary',type=Path)
+          +    parser.add_argument('--delivery',type=Path)
                args=parser.parse_args()
           -    ok=run(args.state.resolve(),args.output.resolve(),args.seed.resolve(),args.force_vpf)
           -    raise SystemExit(0 if ok else 2)
-          +    result=run(args.state.resolve(),args.output.resolve(),args.seed.resolve(),args.force_vpf)
+          +    result=run(args.state.resolve(),args.output.resolve(),args.seed.resolve(),args.force_vpf,args.delivery)
           +    if args.summary:
           +        args.summary.write_text(json.dumps(result,ensure_ascii=False)+'\n',encoding='utf-8')
           +    raise SystemExit(0 if result['news_ok'] and result['vpf_ok'] else 2)
+          --- /dev/null
+          +++ b/app/tools/vpf_delivery.py
+          @@ -0,0 +1,98 @@
+          +"""Carry a verified VPF update from an authorized reader to the Pages workflow."""
+          +
+          +import argparse
+          +from datetime import datetime, timedelta, timezone
+          +from hashlib import sha256
+          +import json
+          +from pathlib import Path
+          +import shutil
+          +import subprocess
+          +import sys
+          +from tempfile import TemporaryDirectory
+          +
+          +from release_inputs import APP
+          +
+          +
+          +def digest(data):
+          +    return sha256(json.dumps(data,ensure_ascii=False,sort_keys=True,
+          +                            separators=(',',':')).encode()).hexdigest()
+          +
+          +
+          +def read(path):
+          +    return json.loads(path.read_text(encoding='utf-8'))
+          +
+          +
+          +def unpack(packet, base, prior, target, now):
+          +    if packet.get('schema')!=1 or packet.get('season')!=base['season']:
+          +        raise ValueError('Sai mùa hoặc phiên bản dữ liệu chuyển giao.')
+          +    health=packet['health']
+          +    if health['status']!='ok' or health.get('error') or not health.get('lastHighlightCheckAt'):
+          +        raise ValueError('Chưa xác minh được lượt đọc VPF và kho video.')
+          +    stamp=datetime.fromisoformat(health['lastSuccessfulCheckAt'])
+          +    video=datetime.fromisoformat(health['lastHighlightCheckAt'])
+          +    if not now-timedelta(hours=3)<=video<=stamp<=now+timedelta(minutes=5):
+          +        raise ValueError('Mốc đọc VPF hoặc kho video nằm ngoài thời hạn.')
+          +    last=prior.get('lastSuccessfulCheckAt')
+          +    if last and stamp<=datetime.fromisoformat(last):
+          +        return False
+          +    if packet['baseDigest']!=digest(base):
+          +        raise ValueError('Dữ liệu VPF đã đổi trong lúc đồng bộ. Hãy đọc phiên bản công khai mới và chạy lại.')
+          +    patch=packet['change']
+          +    if patch is not None:
+          +        if set(patch)!={'revision','publishedAt','matches','rosters','standings'}:
+          +            raise ValueError('Bản ghi chuyển giao có trường không hợp lệ.')
+          +        candidate={**base,**patch,
+          +                   'matches':base['matches']+patch['matches'],
+          +                   'rosters':{**base.get('rosters',{}),**patch['rosters']},
+          +                   'standings':{**base.get('standings',{}),**patch['standings']}}
+          +        target.write_text(json.dumps(candidate,ensure_ascii=False)+'\n',encoding='utf-8')
+          +        subprocess.run(['node','tools/publish.cjs','--verify-next',str(target)],cwd=APP,check=True)
+          +    return True
+          +
+          +
+          +def pack(base_path, output):
+          +    base=read(base_path)
+          +    if base['season']!='2026/27':
+          +        raise ValueError('Mã nguồn chưa cấu hình mùa giải này.')
+          +    with TemporaryDirectory(prefix='vpf-delivery-') as temp:
+          +        temp=Path(temp)
+          +        app=temp/'app'
+          +        shutil.copytree(APP,app,ignore=shutil.ignore_patterns('__pycache__'))
+          +        shutil.copyfile(base_path,app/'updates.json')
+          +        state=temp/'sync'
+          +        old=output if output.exists() else None
+          +        if old:
+          +            prior=read(old).get('health',{})
+          +            if prior.get('lastFullRecheckAt'):
+          +                state.mkdir()
+          +                (state/'sync-status.json').write_text(json.dumps({
+          +                    'lastFullRecheckAt':prior['lastFullRecheckAt']
+          +                }),encoding='utf-8')
+          +        subprocess.run([sys.executable,str(app/'tools/sync-vpf.py'),'--state',str(state),
+          +                        '--recent-days','3'],cwd=app,check=True)
+          +        raw=read(state/'sync-status.json')
+          +        health={key:raw[key] for key in (
+          +            'status','startedAt','finishedAt','lastSuccessfulCheckAt','lastHighlightCheckAt',
+          +            'lastFullRecheckAt','pendingReview','highlightSourcesFailed'
+          +        ) if key in raw}
+          +        change=None
+          +        if (state/'draft.json').exists():
+          +            latest=read(state/'draft.json')
+          +            change={key:latest[key] for key in ('revision','publishedAt')}
+          +            change['matches']=latest['matches'][len(base['matches']):]
+          +            for key in ('rosters','standings'):
+          +                change[key]={k:v for k,v in latest.get(key,{}).items() if v!=base.get(key,{}).get(k)}
+          +        packet={'schema':1,'season':base['season'],'baseDigest':digest(base),'health':health,'change':change}
+          +        if change is None:
+          +            unpack(packet,base,{},temp/'checked.json',datetime.now(timezone.utc))
+          +        output.write_text(json.dumps(packet,ensure_ascii=False,separators=(',',':'))+'\n',encoding='utf-8')
+          +        print('Đã xác minh VPF ·',health['lastSuccessfulCheckAt'],
+          +              '·',len(change['matches']) if change else 0,'bản ghi trận thay đổi.')
+          +
+          +
+          +if __name__=='__main__':
+          +    parser=argparse.ArgumentParser(description=__doc__)
+          +    parser.add_argument('--base',type=Path,required=True)
+          +    parser.add_argument('--output',type=Path,required=True)
+          +    args=parser.parse_args()
+          +    pack(args.base.resolve(),args.output.resolve())
+          --- a/app/tools/check-sync.py
+          +++ b/app/tools/check-sync.py
+          @@ -81,4 +81,18 @@
+               draft,report=tool['prepare'](cache,at,['nc'],True,None)
+               assert draft is None and report[older_id]['pendingReview']
+           
+          +    # A confirmed official score can move a match between the two lists while
+          +    # the goal timeline and official table are still being reconciled.
+          +    at=(datetime.fromisoformat(fixture['date']+'T21:30:00+07:00')).isoformat(timespec='milliseconds')
+          +    newest=calendar_html(fixture,kickoff=fixture['time'],score='2 - 0')
+          +    source['parse_match']=lambda *args,**kwargs: (dict(date=fixture['date'],score=[2,0],status='final',events=[]),[])
+          +    def delay_table(*_):
+          +        raise OSError('BXH chưa cập nhật')
+          +    tool['prepare'].__globals__['official_standings']=delay_table
+          +    draft,report=tool['prepare'](cache,at,['vl1'],True,None)
+          +    result=draft['matches'][-1]
+          +    assert result['id']==fixture_id and result['patch']['status']=='final' and result['patch']['score']==[2,0]
+          +    assert 'events' not in result['patch'] and report[fixture_id]['pendingReview'] and report['table-vl1']['pendingReview']
+          +    valid_candidate(draft)
+          +
+           print('PASS · đổi giờ/sân, hoãn, dữ liệu trống, đối chiếu bàn cũ và hàng chờ xác minh.')
           VPF_PATCH
       - run: python -m pip install --disable-pip-version-check -r requirements.txt
       - name: Restore the last verified release
@@ -210,6 +588,7 @@ jobs:
           set -euo pipefail
           flags=()
           if [[ "$EVENT_NAME" != schedule ]]; then flags+=(--force-vpf); fi
+          if [[ -f vpf-sync-input.json ]]; then flags+=(--delivery "$GITHUB_WORKSPACE/vpf-sync-input.json"); fi
           result=0
           python app/tools/sync-pages.py \
             --state "$RUNNER_TEMP/vpf-checkpoint/data" \
