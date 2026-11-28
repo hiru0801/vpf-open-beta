@@ -26,12 +26,15 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
 
       - name: Verify and unpack the application
         run: python tools/prepare-app.py
 
       - name: Install Python dependencies
-        run: python -m pip install --disable-pip-version-check -r requirements.txt
+        run: python -m pip install --disable-pip-version-check -r requirements.txt fonttools==4.57.0
 
       - name: Restore the last verified release
         shell: bash
@@ -39,7 +42,7 @@ jobs:
           git fetch origin refs/heads/open-beta-data
           git worktree add --detach "$RUNNER_TEMP/vpf-checkpoint" FETCH_HEAD
 
-      - name: Sync six news sources only
+      - name: Sync news and checked match highlights
         id: sync
         shell: bash
         run: |
@@ -54,7 +57,12 @@ jobs:
           if [[ "$news_result" != 0 && "$news_result" != 1 ]]; then exit "$news_result"; fi
           news_ok=false
           if [[ "$news_result" == 0 ]]; then news_ok=true; fi
-          PYTHONPATH="$GITHUB_WORKSPACE/app/tools" python -m live.stage --state "$state" --output "$RUNNER_TEMP/vpf-web"
+          export PYTHONPATH="$GITHUB_WORKSPACE/app/tools"
+          output="$RUNNER_TEMP/vpf-web"
+          python app/tools/sync-pages.py --highlights-only --state "$state" --seed "$GITHUB_WORKSPACE/seed-web" --output "$output"
+          if [[ ! -d "$output" ]]; then
+            python -m live.stage --state "$state" --output "$output"
+          fi
           echo 'deploy=true' >> "$GITHUB_OUTPUT"
           news_hash=$(sha256sum "$RUNNER_TEMP/vpf-web/news-feed.json" | awk '{print $1}')
           data_hash=$(sha256sum "$RUNNER_TEMP/vpf-web/data-status.json" | awk '{print $1}')
@@ -64,16 +72,16 @@ jobs:
             echo "data_hash=$data_hash"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Save verified news checkpoint
+      - name: Save verified news and highlight checkpoint
         if: steps.sync.outputs.deploy == 'true'
         shell: bash
         working-directory: ${{ runner.temp }}/vpf-checkpoint
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- data/news-feed.json
+          git add -- data
           if ! git diff --cached --quiet; then
-            git commit -m "Update verified news feed"
+            git commit -m "Update verified news and match highlights"
             git push origin HEAD:refs/heads/open-beta-data
           fi
 

@@ -1,17 +1,31 @@
 --- a/app/tools/sync-pages.py
 +++ b/app/tools/sync-pages.py
-@@ -32,7 +32,23 @@
+@@ -1,7 +1,7 @@
+ """Refresh the published GitHub Pages bundle and its Git-backed checkpoint."""
+
+ import argparse
+-from datetime import datetime, timezone
++from datetime import datetime, timedelta, timezone
+ import json
+ from pathlib import Path
+ import re
+@@ -32,7 +32,28 @@
      return 55/60
 
 
 -def run(state, output, seed, force_vpf, delivery=None):
 +def scan_highlights(state, at, draft):
 +    backfill = runpy.run_path(str(APP/'tools/backfill-vpf.py'))
++    last_check = state/'highlight-check-at.txt'
 +    last_archive = state/'highlight-archive-at.txt'
++    if last_check.is_file() and datetime.fromisoformat(at) - datetime.fromisoformat(
++            last_check.read_text().strip()) < timedelta(minutes=8):
++        return 0
 +    full = not last_archive.exists() or last_archive.read_text().strip() != at[:10]
 +    with TemporaryDirectory(prefix='highlight-scan-') as cache:
 +        candidate = json.loads(draft.read_text()) if draft.exists() else None
 +        updated, report = backfill['add_highlights'](Path(cache), at, candidate, None if full else 14)
++    last_check.write_text(at+'\n',encoding='utf-8')
 +    if full:
 +        last_archive.write_text(at[:10]+'\n',encoding='utf-8')
 +    print(json.dumps({key:report[key] for key in ('changed','coverage','readable','errors')},
@@ -25,7 +39,7 @@
      sync = runpy.run_path(str(APP/'tools/sync-vpf.py'))
      read, now, public_health = (sync[key] for key in ('read', 'now', 'public_health'))
      expires = sync['expired']
-@@ -60,7 +76,9 @@
+@@ -60,7 +81,9 @@
      draft = work/'draft.json'
      draft.unlink(missing_ok=True)
      vpf_error = False
@@ -36,7 +50,7 @@
          try:
              packet = read(delivery)
              if unpack(packet,read(data),health,draft,datetime.now(timezone.utc)):
-@@ -83,6 +101,12 @@
+@@ -83,6 +106,12 @@
 
      if vpf_error and latest_health.get('lastSuccessfulCheckAt'):
          public_health(status,{**latest_health,'status':'error'})
@@ -49,7 +63,7 @@
      origin = state/'shell-input.txt'
      shell_hash = input_hash()
      if not draft.exists() and (not origin.exists() or origin.read_text().strip()!=shell_hash):
-@@ -112,10 +136,13 @@
+@@ -112,10 +141,13 @@
 
      if not news.exists() or read(news).get('mode') == 'directory':
          shutil.copyfile(seed/'news-feed.json', news)
@@ -66,7 +80,7 @@
      published = read(status)
      latest_check = published.get('lastSuccessfulCheckAt')
      latest_video_check = published.get('lastHighlightCheckAt')
-@@ -138,8 +165,11 @@
+@@ -138,8 +170,11 @@
      parser.add_argument('--force-vpf',action='store_true')
      parser.add_argument('--summary',type=Path)
      parser.add_argument('--delivery',type=Path)
