@@ -1,4 +1,4 @@
-"""Unpack the verified VPF app and install the match-day modules."""
+"""Unpack the verified VPF app and apply repository overlays."""
 
 import argparse
 from hashlib import sha256
@@ -38,6 +38,10 @@ def main():
     shutil.copyfile(source/'live-view.js', ROOT/'app/live-view.js')
     for module in sorted(source.glob('*.py')):
         shutil.copyfile(module, ROOT/'app/tools/live'/module.name)
+    news = ROOT/'tools/news'
+    subprocess.run(['git', 'apply', str(news/'integration.patch')], cwd=ROOT, check=True)
+    for logo in sorted((news/'assets').glob('press-*.png')):
+        shutil.copyfile(logo, ROOT/'app/assets'/logo.name)
 
 
 if __name__ == '__main__':

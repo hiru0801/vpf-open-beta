@@ -1,0 +1,155 @@
+--- a/app/tools/sync-news.py
++++ b/app/tools/sync-news.py
+@@ -196,9 +196,9 @@
+ 
+ 
+ def listing(source, url, raw):
+-    if url.endswith('.rss'):
++    if url.endswith(('.rss', '/feed/')):
+         xml = etree.fromstring(raw,etree.XMLParser(resolve_entities=False,no_network=True))
+-        for item in xml.xpath('//item'):
++        for item in xml.xpath('/rss/channel/item'):
+             title = item.findtext('title','')
+             context = page(('<div>'+item.findtext('description','')+'</div>').encode()).text_content()
+             yield title,item.findtext('link',''),context,item.findtext('pubDate','')
+@@ -213,6 +213,20 @@
+         note = ' '.join(box.xpath('.//*[self::p or self::div][contains(@class,"desc") or contains(@class,"summ") or contains(@class,"excerpt")]//text()'))
+         when = box.xpath('.//time/@datetime|.//time/text()')
+         yield node.get('title') or node.text_content(),node.get('href'),note,' '.join(when)
++
++
++def source_listing(source, url, cache):
++    if source == 'vff':
++        rss_url = url + 'feed/'
++        try:
++            rows = [row for row in listing(source, rss_url, fetch(rss_url, cache))
++                    if row[0].strip() and article_url(source, row[1], url) and parse_date(row[3])]
++            if rows:
++                return rows, 'rss'
++        except (OSError, ValueError, HTTPException, etree.LxmlError):
++            pass
++    rows = list(listing(source, url, fetch(url, cache)))
++    return rows, 'rss' if url.endswith('.rss') else 'html'
+ 
+ 
+ def article_metadata(raw):
+@@ -258,16 +272,16 @@
+     def scan(config):
+         source,url,section = config
+         try:
+-            rows = list(listing(source,url,fetch(url,cache)))
+-            return config,rows,None
++            rows, method = source_listing(source, url, cache)
++            return config,rows,method,None
+         except (OSError,ValueError,HTTPException,etree.LxmlError) as error:
+-            return config,[],str(error)
++            return config,[],None,str(error)
+ 
+     pending = {}
+     results = {}
+     sources_with_cached_articles = set()
+     with ThreadPoolExecutor(max_workers=8) as pool:
+-        for (source,url,section),rows,error in pool.map(scan,SOURCES):
++        for (source,url,section),rows,method,error in pool.map(scan,SOURCES):
+             results.setdefault(source,[]).append(error)
+             accepted = set()
+             for title,href,summary,raw_date in rows:
+@@ -292,6 +306,8 @@
+                     continue
+                 pending[link]=(source,title,leagues,ids,article_section,raw_date)
+             section_checks[url]={'publisher':source,'found':len(accepted),'status':'unavailable' if error else 'ok'}
++            if method:
++                section_checks[url]['method'] = method
+ 
+         def collect(link):
+             source,title,leagues,ids,section,raw_date = pending[link]
+--- a/app/news-view.js
++++ b/app/news-view.js
+@@ -10,6 +10,11 @@
+ };
+ const newsHosts={bongdaplus:['bongdaplus.vn','s27.bongdaplus.vn'],thanhnien:['thanhnien.vn'],znews:['znews.vn'],
+   vtc:['vtcnews.vn','www.vtcnews.vn'],vnexpress:['vnexpress.net'],vff:['vff.org.vn','www.vff.org.vn']};
++const vffSections={
++  vl1:['V.League 1','giai-vo-dich-quoc-gia-v-league-1/'],
++  vl2:['V.League 2','giai-hang-nhat-quoc-gia-v-league-2/'],
++  nc:['Cúp Quốc gia','giai-cup-quoc-gia-national-cup/']
++};
+ const articlesStep=12;
+ const newsKey='vpf-app-v2/news/'+location.pathname.replace(/index\.html$/,'');
+ const newsRefreshMs=5*60*1000;
+@@ -40,10 +45,15 @@
+ }
+ function newsMark(id) {
+   if (!id) return '';
+-  if (id==='vff') return '<span class="news-mark" aria-hidden="true">'+escapeHtml(newsPublishers[id][1])+'</span>';
+   const base=webRelease?.assets||'assets/';
+   return '<span class="news-mark" data-paper="'+id+'" aria-hidden="true"><img src="'+base+'press-'+id+
+     (webRelease?'.webp':'.png')+'" width="26" height="26" alt="" loading="lazy"></span>';
++}
++function newsVffSections() {
++  const entries=newsState.league?[vffSections[newsState.league]]:Object.values(vffSections);
++  return '<p class="small muted news-stamp">Chuyên mục VFF · '+entries.map(([name,slug])=>
++    '<a href="'+newsPublishers.vff[2]+slug+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(name)+'</a>'
++  ).join(' · ')+'</p>';
+ }
+ function newsPaperRail() {
+   const option=(id,name)=>'<button type="button" class="button option'+(id===newsState.source?' selected':'')+
+@@ -94,14 +104,15 @@
+     (!selected && unavailableCount?' · '+unavailableCount+' nguồn gián đoạn':'')+'</p>';
+   const unavailable=['unavailable','partial'].includes(sourceStatus)?'<p class="small muted news-stamp">'+
+     (sourceStatus==='partial'?'Mới cập nhật được một phần từ ':'Chưa cập nhật được từ ')+escapeHtml(selected[0])+'. '+
+-    '<a href="'+safeUrl(selected[2])+'" target="_blank" rel="noopener noreferrer">Mở trang nguồn</a></p>':'';
++    (newsState.source==='vff'?'':'<a href="'+safeUrl(selected[2])+'" target="_blank" rel="noopener noreferrer">Mở trang nguồn</a>')+'</p>':'';
++  const sourceLinks=newsState.source==='vff'?newsVffSections():'';
+   if (!rows.length) {
+     const filtered=newsState.source || newsState.league || newsState.club;
+     const reset=filtered?'<button type="button" class="button ghost" data-news-reset>Bỏ bộ lọc</button>':'';
+-    return stamp+unavailable+'<div class="panel">'+empty(filtered?'Chưa có bài phù hợp với bộ lọc hiện tại.':'Chưa có tin để hiển thị.',reset)+'</div>';
++    return stamp+unavailable+sourceLinks+'<div class="panel">'+empty(filtered?'Chưa có bài phù hợp với bộ lọc hiện tại.':'Chưa có tin để hiển thị.',reset)+'</div>';
+   }
+   const visible=rows.slice(0,newsState.limit);
+-  return stamp+unavailable+'<section aria-labelledby="news-top-title"><h2 id="news-top-title" class="news-section-title">Mới nhất</h2>'+
++  return stamp+unavailable+sourceLinks+'<section aria-labelledby="news-top-title"><h2 id="news-top-title" class="news-section-title">Mới nhất</h2>'+
+     '<ul class="news-grid">'+visible.slice(0,6).map(row=>newsArticle(row,true)).join('')+'</ul></section>'+
+     (visible.length>6?'<section aria-labelledby="news-more-title"><h2 class="news-section-title" id="news-more-title">Đọc tiếp</h2>'+
+       '<ul class="news-list">'+visible.slice(6).map(row=>newsArticle(row,false)).join('')+'</ul></section>':'')+
+--- a/app/tools/check-news.py
++++ b/app/tools/check-news.py
+@@ -108,3 +108,37 @@
+     assert [a['url'] for a in json.loads(p.read_text())['articles']]==[canonical]
+     assert canonical not in requested
+ print('PASS · lọc nguồn, lịch đăng, giải/CLB, giữ tin khi nguồn lỗi và cô lập lỗi URL từng bài.')
++
++section = tool['VFF'] + 'giai-hang-nhat-quoc-gia-v-league-2/'
++article = 'https://www.vff.org.vn/vong-9-hang-nhat/'
++rss = f"""<rss version="2.0"><channel><item>
++<title>Vòng 9 giải Hạng Nhất Quốc gia</title><link>{article}</link>
++<pubDate>Fri, 27 Nov 2026 04:00:00 +0000</pubDate>
++</item></channel></rss>""".encode()
++category = f'<a href="{article}"><h4 class="title">Vòng 9 giải Hạng Nhất Quốc gia</h4></a>'.encode()
++logic['SOURCES'] = (('vff', section, 'vl2'),)
++for payload in (rss, b'<html><body>Unavailable</body></html>', TimeoutError('RSS timeout')):
++    calls = []
++
++    def fetch_vff(address, cache):
++        calls.append(address)
++        if address == section + 'feed/':
++            if isinstance(payload, TimeoutError):
++                raise payload
++            return payload
++        if address == section:
++            return category
++        assert address == article
++        return detail.encode()
++
++    logic['fetch'] = fetch_vff
++    with TemporaryDirectory() as tmp:
++        p = Path(tmp)/'news-feed.json'
++        assert tool['run'](p, None, now)
++        row, = json.loads(p.read_text())['articles']
++        assert row['url'] == article and row['leagues'] == ['vl2']
++        if payload == rss:
++            assert calls == [section + 'feed/'] and row['publishedAt'] == '2026-11-27T11:00:00+07:00'
++        else:
++            assert calls == [section + 'feed/', section, article]
++print('PASS · RSS VFF, giờ đăng gốc, dự phòng HTML khi RSS lỗi.')
