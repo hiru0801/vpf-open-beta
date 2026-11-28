@@ -40,11 +40,12 @@ def main():
         shutil.copyfile(module, ROOT/'app/tools/live'/module.name)
     news = ROOT/'tools/news'
     subprocess.run(['git', 'apply', str(news/'integration.patch')], cwd=ROOT, check=True)
-    for logo in sorted((news/'assets').glob('press-*.png')):
-        shutil.copyfile(logo, ROOT/'app/assets'/logo.name)
     brand = ROOT/'tools/brand'
     subprocess.run(['git', 'apply', str(brand/'integration.patch')], cwd=ROOT, check=True)
-    shutil.copyfile(brand/'vpf-brand.png', ROOT/'app/assets/vpf-brand.png')
+    legal = ROOT/'tools/legal'
+    subprocess.run(['git', 'apply', str(legal/'integration.patch')], cwd=ROOT, check=True)
+    for name in ('legal.html', 'legal.css', 'news-view.js'):
+        shutil.copyfile(legal/name, ROOT/'app'/name)
 
 
 if __name__ == '__main__':

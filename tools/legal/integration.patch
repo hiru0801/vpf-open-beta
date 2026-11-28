@@ -1,0 +1,373 @@
+--- a/app/app.js
++++ b/app/app.js
+@@ -24,6 +24,10 @@
+ const key = 'vpf-app-v2/preferences';
+ const feedKey = 'vpf-app-v2.4.1/'+baseData.season+'/data'+location.pathname?.replace(/index\.html$/,'');
+ const hosted = ['https:','http:'].includes(location.protocol);
++if (hosted) {
++  try { localStorage.removeItem('vpf-app-v2/news/'+location.pathname.replace(/index\.html$/,'')); }
++  catch { /* Storage can be unavailable in private mode. */ }
++}
+ const quickDays = {yesterday:'Hôm qua',today:'Hôm nay',tomorrow:'Ngày mai'};
+ const ranges = {week:'7 ngày tới',round:'Theo vòng',all:'Tất cả các trận',results:'Kết quả'};
+ const periods = {...quickDays,...ranges};
+@@ -512,7 +516,7 @@
+   const title=activeTab==='competition'?(leagueId==='nc'?'Nhánh đấu':'Bảng xếp hạng'):titleFor[activeTab];
+   document.documentElement.dataset.league=leagueId;
+   document.documentElement.classList.toggle('view-match',Boolean(m));
+-  document.title=(m?sideName(m.home)+' – '+sideName(m.away):title+' · '+league.name)+' | VPF App';
++  document.title=(m?sideName(m.home)+' – '+sideName(m.away):title+' · '+league.name)+' | Bóng đá Việt Nam Open Beta';
+   byId('league-logo').src=leagueLogo(leagueId);
+   byId('league-name').textContent=league.name;
+   byId('league-sponsor').textContent=league.sponsor+' · ';
+@@ -532,11 +536,6 @@
+     loadLiveMatch(m.id);
+   }
+   else if (state.tab==='following') revealFollowedClub(content.querySelector('[data-follow-club].selected'));
+-  else if (newsIsOpen()) {
+-    const selected=content.querySelector('[data-news-source].selected');
+-    if (selected?.offsetLeft>=byId('news-rail').clientWidth) byId('news-rail').scrollLeft=selected.offsetLeft;
+-    loadNews();
+-  }
+ 
+ }
+ function updateList(id,html) {
+@@ -677,7 +676,7 @@
+ function renderDetail() {
+   const last=dialogItems.at(-1);
+   byId('dialog-content').innerHTML={
+-    club:()=>clubDetail(last.id),picker:pickerView,sources:sourcesView
++    club:()=>clubDetail(last.id),picker:pickerView
+   }[last.kind]();
+   dialog.querySelector('[data-action="detail-back"]').hidden=dialogItems.length<2;
+   if (last.kind==='club') loadClubRoster(last.id);
+@@ -745,14 +744,6 @@
+   return '<details class="detail-section roster"><summary>Danh sách đăng ký cầu thủ'+(count?' · '+count+' cầu thủ':'')+'</summary>'+
+     (pending?'<div data-lazy-club="'+id+'"></div>':list)+'</details>';
+ }
+-function sourcesView() {
+-  const revision=appliedFeed?.revision;
+-  return detailHeading('Nguồn dữ liệu','Bản dữ liệu '+dataDate()+(revision?' · rev '+revision:''))+
+-    '<p class="data-note">Xem lịch chính thức của VPF để tra cứu các thay đổi mới nhất. Bản web nhận các bản cập nhật đã xuất bản của ứng dụng.</p>'+
+-    '<ul class="links-list">'+['vl1cal','vl2cal','cupcal','plan','rule','vl1table','vl2table','v1goals','v2goals','v2ref','rule-vl1','rule-vl2','afc-slots'].map(id=>'<li>'+sourceLink(id)+'</li>').join('')+'</ul>'+
+-    '<p class="small muted">Lịch tham chiếu và dữ liệu kế thừa có nhãn riêng. Giờ thi đấu hiển thị theo giờ Việt Nam.</p>';
+-}
+-
+ function calendarText(m,now=new Date()) {
+   return window.VPF_CALENDAR.render([window.VPF_CALENDAR.event(data,m,sideName(m.home)+' – '+sideName(m.away),now,roundName(m))]);
+ }
+@@ -852,26 +843,7 @@
+   if (d.copyMatch && Object.hasOwn(matches,d.copyMatch)) return copyText(matchUrl(matches[d.copyMatch]),byId('share-url'),'Đã sao chép liên kết trận.');
+   if (d.copyCalendar && Object.hasOwn(clubs,d.copyCalendar)) return copyText(clubCalendarUrl(d.copyCalendar),byId('share-url'),'Đã sao chép liên kết lịch CLB.');
+   if (d.action==='refresh') return Promise.all([refreshFeed(true),refreshMatchDay()]);
+-  if (d.newsSource!==undefined) return chooseNewsSource(d.newsSource);
+-  if (d.newsScroll) return scrollNewsRail(Number(d.newsScroll));
+-  if (d.newsRetry!==undefined) return loadNews(true);
+-  if (d.newsReset!==undefined) {
+-    byId('news-league').value='';
+-    byId('news-club').value='';
+-    newsState.league='';
+-    newsState.club='';
+-    chooseNewsSource('');
+-    byId('news-rail').querySelector('[data-news-source=""]').focus();
+-    return;
+-  }
+-  if (d.newsMore!==undefined) {
+-    const firstNew=byId('news-results').querySelectorAll('.news-link').length;
+-    newsState.limit+=articlesStep;
+-    refreshNewsView({filter:true});
+-    byId('news-results').querySelectorAll('.news-link')[firstNew]?.focus();
+-    return;
+-  }
+-  if (d.action==='picker'||d.action==='sources') return showDetail(d.action,null,el);
++  if (d.action==='picker') return showDetail('picker',null,el);
+   if (d.action==='close') return closeDetail();
+   if (d.action==='detail-back') return backDetail();
+   if (d.action==='match-back') return returnFromMatch();
+@@ -980,12 +952,6 @@
+ });
+ document.addEventListener('change',event=>{
+   const {id,value}=event.target;
+-  if (id==='news-league' || id==='news-club') {
+-    newsState[id==='news-league'?'league':'club']=value;
+-    newsState.limit=articlesStep;
+-    refreshNewsView({filter:true});
+-    return;
+-  }
+   if (id==='club-stat-filter') {
+     currentFilters().clubMetric=value;
+     save();
+@@ -1053,10 +1019,7 @@
+   refreshFeed();
+   if (webRelease) startMatchDay();
+   const checkVisible=()=>{
+-    if (!document.hidden) {
+-      refreshFeed();
+-      loadNews();
+-    }
++    if (!document.hidden) refreshFeed();
+   };
+   setTimeout(()=>{
+     checkVisible();
+--- a/app/index.html
++++ b/app/index.html
+@@ -5,7 +5,7 @@
+   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+   <meta name="theme-color" content="#172b49">
+   <meta name="description" content="Tra cứu lịch, kết quả, bảng xếp hạng và nhánh đấu của ba giải bóng đá chuyên nghiệp Việt Nam.">
+-  <title>VPF App 2.4.2 · Bóng đá Việt Nam</title>
++  <title>Bóng đá Việt Nam · Open Beta</title>
+   <meta http-equiv="Content-Security-Policy" content="default-src 'self' file:; script-src 'self' file:; style-src 'self' file:; img-src 'self' file:; font-src 'self' file:; connect-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'">
+   <script src="theme.js"></script>
+   <link rel="stylesheet" href="styles.css">
+@@ -46,7 +46,13 @@
+     <noscript><p class="panel">Bật JavaScript để tra cứu lịch và kết quả.</p></noscript>
+   </main>
+   <footer class="wrap footer">
+-    <button type="button" class="text-button" data-action="sources">Nguồn dữ liệu</button>
++    <nav class="footer-info" aria-label="Thông tin dự án">
++      <a class="text-button" href="legal.html#gioi-thieu">Giới thiệu</a>
++      <a class="text-button" href="legal.html#nguon">Nguồn dữ liệu và quyền sử dụng</a>
++      <a class="text-button" href="legal.html#rieng-tu">Quyền riêng tư</a>
++      <a class="text-button" href="legal.html#dinh-chinh">Đính chính và gỡ nội dung</a>
++    </nav>
++    <p class="footer-disclosure">Dự án độc lập do người hâm mộ vận hành. VPF và VFF là nguồn tham chiếu.</p>
+     <span id="snapshot-label"></span>
+     <button id="refresh-data" type="button" class="text-button" data-action="refresh" hidden>Kiểm tra cập nhật</button>
+   </footer>
+--- a/app/styles.css
++++ b/app/styles.css
+@@ -627,45 +627,10 @@
+   .header-inner { column-gap: 4px; }
+ }
+ 
+-/* News keeps its own scrollable publisher rail and bounded headline list. */
+-.news-controls { padding: 12px; }
+-.news-picker { display: grid; grid-template-columns: 44px minmax(0,1fr) 44px; gap: 6px; align-items: start; }
+-.news-arrow { padding: 0; width: 44px; min-height: 44px; font-size: 1.45rem; }
+-.news-rail { display: flex; gap: 8px; overflow-x: auto; position: relative; scrollbar-width: thin; padding: 3px 3px 7px; }
+-.news-rail .option { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; white-space: nowrap; }
+-.news-mark { width: 26px; height: 26px; flex: 0 0 26px; display: inline-grid; place-items: center; border-radius: 5px; background: #fff; color: #172b49; overflow: hidden; font-size: .66rem; font-weight: 800; }
+-.news-mark img { width: 100%; height: 100%; object-fit: contain; }
+-.news-filters { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-top: 10px; padding: 0; }
+-.news-filters label { margin-bottom: 4px; display: block; }
+-.news-stamp { margin: 12px 0; }
+-.news-section-title { font-size: 1.05rem; margin: 18px 0 10px; }
+-.news-grid, .news-list { list-style: none; padding: 0; }
+-.news-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }
+-.news-list { display: grid; gap: 7px; }
+-.news-entry { min-width: 0; }
+-.news-entry article, .news-entry .news-link { height: 100%; }
+-.news-link { display: flex; flex-direction: column; color: var(--ink); text-decoration: none; border: 1px solid var(--line); border-radius: 13px; overflow: hidden; background: var(--surface); }
+-.news-link:hover { border-color: var(--accent); }
+-.news-link:hover h3 { text-decoration: underline; }
+-.news-cover { min-height: 88px; display: flex; align-items: center; justify-content: center; gap: 12%; padding: 16px 10px; background: linear-gradient(120deg,#193454,#244b75); }
+-.news-cover[data-competition="vl2"] { background: linear-gradient(120deg,#26315d,#394578); }
+-.news-cover[data-competition="nc"] { background: linear-gradient(120deg,#164b3a,#27634d); }
+-.news-cover img { width: 54px; height: 54px; object-fit: contain; }
+-.news-copy { display: flex; flex: 1; flex-direction: column; padding: 12px; gap: 6px; }
+-.news-copy h3 { font-size: .98rem; line-height: 1.35; overflow-wrap: anywhere; }
+-.news-competition { color: var(--accent); font-size: .81rem; font-weight: 700; }
+-.news-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; margin-top: auto; color: var(--muted); font-size: .81rem; }
+-.news-meta time { margin-inline-start: auto; }
+-.news-list .news-copy { gap: 3px; }
+-.news-more { text-align: center; margin: 16px 0; }
+-@media (max-width: 720px) {
+-  .news-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+-  .news-picker { grid-template-columns: 42px minmax(0,1fr) 42px; gap: 4px; }
+-  .news-arrow { width: 42px; }
+-  .news-cover { min-height: 70px; padding: 10px; gap: 8%; }
+-  .news-cover img { width: 44px; height: 44px; }
+-  .news-copy { padding: 9px; }
+-  .news-meta time { margin-inline-start: 0; }
+-}
++.news-directory { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,17rem),1fr)); gap: 12px; }
++.news-directory-source h2 { font-size: 1rem; }
++.news-directory-source a { display: inline-flex; align-items: center; min-height: 44px; }
++.footer-info { flex: 1 0 100%; display: flex; flex-wrap: wrap; gap: 0 1.1rem; }
++.footer-disclosure { flex-basis: 100%; margin: 0 0 .35rem; }
+ 
+ .status-tag.live,.match-center .live{color:var(--accent);font-weight:700}
+--- a/app/worker.js
++++ b/app/worker.js
+@@ -3,11 +3,12 @@
+ // Release paths are immutable. Keep the immediately previous shell available during updates.
+ const releaseId='__RELEASE__';
+ const revision=Number('__REVISION__');
+-const prefix='vpf-app-'+new URL('./',self.location.href).pathname+':';
++const appPrefix='vpf-app-'+new URL('./',self.location.href).pathname+':';
++const prefix=appPrefix+'directory:';
+ const cacheName=prefix+releaseId;
+ const root='releases/'+releaseId+'/';
+-const shell=['index.html',...['index-data.js','app.js','theme.js','styles.css','data-update.js','calendar.js',
+-  'match-view.js','competition-view.js','web-data.js','live-view.js','news-view.js','news-snapshot.js',
++const shell=['index.html','legal.html','legal.css',...['index-data.js','app.js','theme.js','styles.css','data-update.js','calendar.js',
++  'match-view.js','competition-view.js','web-data.js','live-view.js','news-view.js',
+   'assets/InterVariable.woff2','assets/vl1.webp','assets/vl2.webp','assets/nc.webp',
+   'assets/app-32.png','assets/app-180.png','assets/app-192.png','assets/app-512.png'].map(file=>root+file)];
+ const scope=new URL('./',self.location.href);
+@@ -23,7 +24,9 @@
+ });
+ self.addEventListener('activate',event=>{
+   event.waitUntil((async()=>{
+-    const keys=(await caches.keys()).filter(key=>key.startsWith(prefix) && key!==cacheName);
++    const owned=(await caches.keys()).filter(key=>key.startsWith(appPrefix));
++    await Promise.all(owned.filter(key=>!key.startsWith(prefix)).map(key=>caches.delete(key)));
++    const keys=owned.filter(key=>key.startsWith(prefix) && key!==cacheName);
+     const indexed=await Promise.all(keys.map(async key=>{
+       const stamp=await (await caches.open(key)).match(marker);
+       return [key,stamp?Number(await stamp.text()):0];
+@@ -39,6 +42,13 @@
+   const url=new URL(request.url);
+   if (request.method!=='GET' || url.origin!==scope.origin || !url.pathname.startsWith(scope.pathname)) return;
+   const relative=url.pathname.slice(scope.pathname.length);
++  if (relative==='legal.html' || relative==='legal.css') {
++    event.respondWith((async()=>{
++      try { return await fetch(request); }
++      catch { return (await caches.open(cacheName)).match(request); }
++    })());
++    return;
++  }
+   if (request.mode==='navigate' && (relative==='' || relative==='index.html')) {
+     event.respondWith((async()=>{
+       try {
+--- a/app/tools/build-web.cjs
++++ b/app/tools/build-web.cjs
+@@ -78,9 +78,9 @@
+ const size=Buffer.byteLength(boot);
+ if (size>120000) throw Error('Dữ liệu mở app vượt ngân sách 120 KB: '+size+' B');
+ fs.writeFileSync(path.join(output,'index-data.js'),boot);
+-for (const file of ['styles.css','theme.js','data-update.js','calendar.js','match-view.js','competition-view.js','web-data.js','live-view.js','news-view.js','news-snapshot.js','app.js']) fs.copyFileSync(path.join(__dirname,'..',file),path.join(output,file));
+-require('../news-snapshot.js');
+-json(path.join(out,'news-feed.json'),{...window.VPF_NEWS,mode:'snapshot'});
++for (const file of ['styles.css','theme.js','data-update.js','calendar.js','match-view.js','competition-view.js','web-data.js','live-view.js','news-view.js','app.js']) fs.copyFileSync(path.join(__dirname,'..',file),path.join(output,file));
++for (const file of ['legal.html','legal.css']) fs.copyFileSync(path.join(__dirname,'..',file),path.join(out,file));
++json(path.join(out,'news-feed.json'),{schema:1,mode:'directory',articles:[]});
+ const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8')
+   .replace('</head>','  <link rel="manifest" href="manifest.webmanifest">\n'+
+     '  <link rel="icon" type="image/png" sizes="32x32" href="'+folder+'assets/app-32.png">\n'+
+@@ -94,7 +94,7 @@
+ json(path.join(out,'release-info.json'),release);
+ json(path.join(out,'data-status.json'),{schema:1,mode:'snapshot'});
+ json(path.join(out,'manifest.webmanifest'),{
+-  id:'./',name:'VPF App · Bóng đá Việt Nam',short_name:'VPF App',lang:'vi',
++  id:'./',name:'Bóng đá Việt Nam · Open Beta',short_name:'Bóng đá VN',lang:'vi',
+   start_url:'./',scope:'./',display:'standalone',theme_color:'#172b49',background_color:'#f5f7fa',
+   icons:[192,512].map(size=>({src:folder+'assets/app-'+size+'.png',sizes:size+'x'+size,type:'image/png'}))
+ });
+--- a/app/tools/prepare-assets.py
++++ b/app/tools/prepare-assets.py
+@@ -5,13 +5,13 @@
+ import subprocess
+ import sys
+ 
+-from PIL import Image
++from PIL import Image, ImageDraw
+ from fontTools.ttLib import TTFont
+ 
+ source,output=map(Path,sys.argv[1:])
+ output.mkdir(parents=True)
+ for file in sorted(source.iterdir()):
+-    if file.name == 'vpf-brand.png':
++    if file.name.startswith('press-'):
+         continue
+     if file.suffix.lower() in ('.png','.webp','.jpg','.jpeg'):
+         with Image.open(file) as original:
+@@ -32,9 +32,11 @@
+ if 0x2304 not in cmap:
+     raise ValueError('Font web thiếu dấu mũi tên của nút Đổi giải.')
+ 
+-with Image.open(source/'vpf-brand.png') as brand:
+-    if brand.width != brand.height or brand.width < 512:
+-        raise ValueError('Logo VPF phải là ảnh vuông từ 512 px.')
+-    for size in (32, 180, 192, 512):
+-        icon = brand.resize((size, size), Image.Resampling.LANCZOS)
+-        icon.save(output/f'app-{size}.png', optimize=True)
++brand = Image.new('RGB', (512, 512), '#102539')
++draw = ImageDraw.Draw(brand)
++draw.rounded_rectangle((44, 44, 467, 467), radius=96, fill='#183e54')
++draw.rounded_rectangle((121, 156, 391, 356), radius=20, outline='#94e3d1', width=15)
++draw.line((256, 160, 256, 352), fill='#94e3d1', width=13)
++draw.ellipse((219, 219, 293, 293), fill='#183e54', outline='#94e3d1', width=12)
++for size in (32, 180, 192, 512):
++    brand.resize((size, size), Image.Resampling.LANCZOS).save(output/f'app-{size}.png', optimize=True)
+--- a/app/tools/release_inputs.py
++++ b/app/tools/release_inputs.py
+@@ -6,9 +6,9 @@
+ from pathlib import Path, PurePosixPath
+ 
+ APP = Path(__file__).resolve().parents[1]
+-RUNTIME = ('index.html','styles.css','data.js','data-update.js','calendar.js',
++RUNTIME = ('index.html','styles.css','legal.html','legal.css','data.js','data-update.js','calendar.js',
+            'theme.js','match-view.js','competition-view.js','web-data.js','live-view.js','news-view.js',
+-           'news-snapshot.js','app.js','worker.js')
++           'app.js','worker.js')
+ BUILD = ('tools/publish.cjs','tools/build-web.cjs','tools/release.py','tools/release_inputs.py',
+          'tools/prepare-assets.py')
+ 
+--- a/app/tools/sync-pages.py
++++ b/app/tools/sync-pages.py
+@@ -53,10 +53,6 @@
+     assert read(data)['revision'] == metadata['revision'], 'Bản phát hành lệch mã dữ liệu đã lưu.'
+     shutil.copyfile(data, APP/'updates.json')
+ 
+-    news_error = command(sys.executable,'tools/sync-news.py','--output',str(news),check=False)
+-    if not read(news).get('lastSuccessfulCheckAt'):
+-        shutil.copyfile(seed/'news-feed.json',news)
+-
+     health_path = work/'sync-status.json'
+     health = read(health_path) if health_path.exists() else {}
+     latest_health = health
+@@ -104,7 +100,8 @@
+             if previous_assets.exists():
+                 shutil.rmtree(previous_assets)
+             previous_assets.mkdir()
+-            copy_immutable_assets(sealed, previous_assets)
++            if (sealed/'legal.html').is_file():
++                copy_immutable_assets(sealed, previous_assets)
+             shutil.rmtree(sealed)
+             rebuilt.rename(sealed)
+             shutil.copyfile(draft,data)
+@@ -113,13 +110,14 @@
+     for scratch in ('lock.sqlite','latest-check.json','highlight-check.json'):
+         (work/scratch).unlink(missing_ok=True)
+ 
++    shutil.copyfile(sealed/'news-feed.json', news)
+     stage(state, output)
+     published = read(status)
+     latest_check = published.get('lastSuccessfulCheckAt')
+     latest_video_check = published.get('lastHighlightCheckAt')
+     vpf_ok = (not vpf_error and published.get('mode')=='sync' and published.get('state')=='ok'
+               and not expires(latest_check,now(),3) and not expires(latest_video_check,now(),3))
+-    result = {'news_ok':not news_error,'vpf_ok':vpf_ok}
++    result = {'vpf_ok':vpf_ok}
+     if not vpf_ok:
+         error = latest_health.get('error')
+         if error:
+@@ -140,4 +138,4 @@
+     result=run(args.state.resolve(),args.output.resolve(),args.seed.resolve(),args.force_vpf,args.delivery)
+     if args.summary:
+         args.summary.write_text(json.dumps(result,ensure_ascii=False)+'\n',encoding='utf-8')
+-    raise SystemExit(0 if result['news_ok'] and result['vpf_ok'] else 2)
++    raise SystemExit(0 if result['vpf_ok'] else 2)
+--- a/app/tools/live/stage.py
++++ b/app/tools/live/stage.py
+@@ -20,13 +20,16 @@
+ def stage(state, output):
+     sealed = state/'sealed'
+     release = verify_bundle(sealed)
++    if not (sealed/'legal.html').is_file() or json.loads((sealed/'news-feed.json').read_text()) != {
++        'schema': 1, 'mode': 'directory', 'articles': [],
++    }:
++        raise ValueError('Bản phát hành chưa áp dụng chính sách Tin tức công khai.')
+     shutil.copytree(sealed, output)
+     for directory in (state/'previous-assets').glob('*'):
+         dest = output/'releases'/directory.name
+         if not dest.exists():
+             shutil.copytree(directory, dest)
+-    for filename in ('news-feed.json', 'data-status.json'):
+-        shutil.copyfile(state/filename, output/filename)
++    shutil.copyfile(state/'data-status.json', output/'data-status.json')
+     copy_live(state, output, release['season'])
+     (output/'release-files.json').unlink()
+ 
