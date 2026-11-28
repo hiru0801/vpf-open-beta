@@ -58,7 +58,7 @@
  function calendarText(m,now=new Date()) {
    return window.VPF_CALENDAR.render([window.VPF_CALENDAR.event(data,m,sideName(m.home)+' – '+sideName(m.away),now,roundName(m))]);
  }
-@@ -852,26 +843,22 @@
+@@ -852,26 +843,28 @@
    if (d.copyMatch && Object.hasOwn(matches,d.copyMatch)) return copyText(matchUrl(matches[d.copyMatch]),byId('share-url'),'Đã sao chép liên kết trận.');
    if (d.copyCalendar && Object.hasOwn(clubs,d.copyCalendar)) return copyText(clubCalendarUrl(d.copyCalendar),byId('share-url'),'Đã sao chép liên kết lịch CLB.');
    if (d.action==='refresh') return Promise.all([refreshFeed(true),refreshMatchDay()]);
@@ -77,11 +77,17 @@
 -  if (d.newsMore!==undefined) {
 -    const firstNew=byId('news-results').querySelectorAll('.news-link').length;
 +  if (el.hasAttribute('data-news-retry')) return loadNews(true);
++  if (el.hasAttribute('data-news-source')) {
++    selectNewsSource(d.newsSource);
++    newsState.limit=articlesStep;
++    return refreshNewsView({filter:true});
++  }
 +  if (el.hasAttribute('data-news-reset')) {
-+    Object.assign(newsState,{source:'',league:'',club:'',limit:articlesStep});
++    selectNewsSource('');
++    Object.assign(newsState,{league:'',club:'',limit:articlesStep});
 +    content.querySelectorAll('.news-filters select').forEach(select=>{ select.value=''; });
 +    refreshNewsView({filter:true});
-+    byId('news-source').focus({preventScroll:true});
++    content.querySelector('[data-news-source=""]').focus({preventScroll:true});
 +    return;
 +  }
 +  if (el.hasAttribute('data-news-more')) {
@@ -99,13 +105,13 @@
    if (d.action==='close') return closeDetail();
    if (d.action==='detail-back') return backDetail();
    if (d.action==='match-back') return returnFromMatch();
-@@ -980,11 +967,11 @@
+@@ -980,11 +973,11 @@
  });
  document.addEventListener('change',event=>{
    const {id,value}=event.target;
 -  if (id==='news-league' || id==='news-club') {
 -    newsState[id==='news-league'?'league':'club']=value;
-+  const newsField={'news-source':'source','news-league':'league','news-club':'club'}[id];
++  const newsField={'news-league':'league','news-club':'club'}[id];
 +  if (newsField) {
 +    newsState[newsField]=value;
      newsState.limit=articlesStep;
@@ -115,7 +121,7 @@
    }
    if (id==='club-stat-filter') {
      currentFilters().clubMetric=value;
-@@ -1053,10 +1040,9 @@
+@@ -1053,10 +1046,9 @@
    refreshFeed();
    if (webRelease) startMatchDay();
    const checkVisible=()=>{
@@ -203,8 +209,12 @@
 -}
 +/* Tin tức */
 +.news-controls { padding: 14px; }
-+.news-filters { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }
-+.news-filters label { display: block; margin-bottom: 5px; font-size: .875rem; font-weight: 650; }
++.news-source-list { display: flex; flex-wrap: wrap; gap: 6px; }
++.news-source { display: inline-flex; align-items: center; gap: 6px; padding-inline: 9px; min-height: 44px; }
++.news-logo { flex: none; box-sizing: border-box; width: 24px; height: 24px; padding: 2px; border-radius: 5px; background: #fff; object-fit: contain; }
++.news-source-label { display: inline-flex; align-items: center; gap: 6px; }
++.news-filters { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-top: 12px; }
++.news-filter-label,.news-filters label { display: block; margin: 0 0 5px; font-size: .875rem; font-weight: 650; }
 +.news-filters select { width: 100%; min-height: 44px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; font: inherit; }
 +.news-stamp { margin: 10px 0; }
 +.news-section-title { font-size: 1rem; margin: 18px 0 8px; }
@@ -218,15 +228,11 @@
 +.news-copy { display: flex; flex-direction: column; height: 100%; gap: 6px; }
 +.news-competition { color: var(--accent); font-size: .75rem; font-weight: 650; margin: 0; }
 +.news-entry h3 { margin: 0; font-size: 1rem; line-height: 1.42; overflow-wrap: anywhere; }
-+.news-meta { display: flex; align-items: baseline; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding-top: 4px; margin-top: auto; color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
++.news-meta { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding-top: 4px; margin-top: auto; color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
 +.news-meta span { font-weight: 650; }
 +.news-more { text-align: center; margin-top: 14px; }
 +.news-sources { margin-top: 18px; }
 +.news-sources summary { cursor: pointer; color: var(--accent); min-height: 44px; align-content: center; font-weight: 650; }
-+@media (max-width: 600px) {
-+  .news-filters { grid-template-columns: repeat(2,minmax(0,1fr)); }
-+  .news-filters > :first-child { grid-column: 1 / -1; }
-+}
 +.footer-info { flex: 1 0 100%; display: flex; flex-wrap: wrap; gap: 0 1.1rem; }
 +.footer-disclosure { flex-basis: 100%; margin: 0 0 .35rem; }
  
@@ -309,7 +315,7 @@
  });
 --- a/app/tools/prepare-assets.py
 +++ b/app/tools/prepare-assets.py
-@@ -5,13 +5,13 @@
+@@ -5,7 +5,7 @@
  import subprocess
  import sys
  
@@ -318,14 +324,20 @@
  from fontTools.ttLib import TTFont
  
  source,output=map(Path,sys.argv[1:])
- output.mkdir(parents=True)
- for file in sorted(source.iterdir()):
--    if file.name == 'vpf-brand.png':
-+    if file.name.startswith('press-'):
+@@ -15,9 +15,10 @@
          continue
      if file.suffix.lower() in ('.png','.webp','.jpg','.jpeg'):
          with Image.open(file) as original:
-@@ -32,9 +32,11 @@
+-            size=192 if not file.name.startswith('club-') else 144
++            press=file.name.startswith('press-')
++            size=96 if press else 144 if file.name.startswith('club-') else 192
+             image=original.convert('RGBA')
+             image.thumbnail((size,size),Image.Resampling.LANCZOS)
+-            image.save(output/(file.stem+'.webp'),'WEBP',quality=88,method=6)
++            image.save(output/(file.stem+'.webp'),'WEBP',lossless=press,quality=88,method=6)
+     elif file.suffix.lower() in ('.txt','.md'):
+         shutil.copyfile(file,output/file.name)
+@@ -32,9 +33,11 @@
  if 0x2304 not in cmap:
      raise ValueError('Font web thiếu dấu mũi tên của nút Đổi giải.')
  

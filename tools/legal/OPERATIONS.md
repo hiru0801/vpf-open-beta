@@ -7,7 +7,7 @@
 | Lịch, tỷ số, diễn biến, bảng xếp hạng | VPF và nguồn đối chiếu theo trận | Trường dữ liệu và liên kết | Điều kiện đọc tự động và công bố theo nhóm dữ liệu |
 | Phiếu đăng ký | Chuyên mục và trang trận VPF | Đội hình đã đối chiếu, liên kết gốc | Quyền xử lý phiếu, phạm vi trường công bố và quy trình yêu cầu dữ liệu cá nhân |
 | Tên, logo giải và CLB | Đơn vị tổ chức, CLB hoặc chủ thể quyền | Nhận diện đội và giải trong giao diện tra cứu | Phạm vi tái sử dụng và yêu cầu nhận diện |
-| Bài báo, logo tòa soạn | VFF, Bóng Đá Plus, Thanh Niên, Znews, VTC News, VnExpress | Tiêu đề, giờ đăng, tên nguồn và liên kết bài gốc hoặc chuyên mục | Phân loại pháp lý và quyền dẫn lại hoặc dùng logo |
+| Bài báo, logo tòa soạn | VFF, Bóng Đá Plus, Thanh Niên, Znews, VTC News, VnExpress | Tiêu đề, giờ đăng, tên và biểu trưng nguồn, liên kết bài gốc hoặc chuyên mục | Phân loại pháp lý và quyền dẫn lại hoặc dùng logo |
 | Video và phát sóng | VPF, đài hoặc kênh phát ghi theo trận | Liên kết ra nguồn | Điều kiện của kênh trước khi nhúng hoặc phát lại |
 | Nhận diện app | Đồ họa sân bóng do dự án tạo | Biểu tượng tab và PWA | Đối chiếu trước khi đổi tên hoặc biểu tượng |
 

@@ -49,14 +49,23 @@ function newsVffSections() {
     '<a href="'+newsPublishers.vff[2]+slug+'" target="_blank" rel="noopener noreferrer">'+escapeHtml(name)+'</a>'
   ).join(' · ')+'</p>';
 }
+function newsLogo(id) {
+  const src=webRelease?webRelease.assets+'press-'+id+'.webp':'assets/press-'+id+'.png';
+  return '<img class="news-logo" src="'+src+'" alt="" width="24" height="24" loading="lazy" decoding="async">';
+}
+function newsSourceButton(id,name) {
+  const selected=id===newsState.source;
+  return '<button type="button" class="button option news-source'+(selected?' selected':'')+'" data-news-source="'+id+
+    '" aria-pressed="'+selected+'" aria-controls="news-results">'+(id?newsLogo(id):'')+'<span>'+escapeHtml(name)+'</span></button>';
+}
 function newsFilters() {
   const option=(id,name,selected)=>'<option value="'+id+'"'+(id===selected?' selected':'')+'>'+escapeHtml(name)+'</option>';
   const clubNames=Object.entries(clubs).sort((a,b)=>a[1].name.localeCompare(b[1].name,'vi'));
   const field=(id,label,options)=>'<div><label for="'+id+'">'+label+'</label><select id="'+id+'">'+options+'</select></div>';
-  return '<div class="news-filters">'+
-    field('news-source','Nguồn tin',option('','Tất cả nguồn',newsState.source)+
-      Object.entries(newsPublishers).map(([id,[name]])=>option(id,name,newsState.source)).join(''))+
-    field('news-league','Giải đấu',option('','Tất cả giải',newsState.league)+
+  return '<div role="group" aria-labelledby="news-source-label"><p class="news-filter-label" id="news-source-label">Nguồn tin</p>'+
+    '<div class="news-source-list">'+newsSourceButton('','Tất cả nguồn')+
+    Object.entries(newsPublishers).map(([id,[name]])=>newsSourceButton(id,name)).join('')+'</div></div>'+
+    '<div class="news-filters">'+field('news-league','Giải đấu',option('','Tất cả giải',newsState.league)+
       Object.entries(leagues).map(([id,{name}])=>option(id,name,newsState.league)).join(''))+
     field('news-club','Câu lạc bộ',option('','Tất cả CLB',newsState.club)+
       clubNames.map(([id,{name}])=>option(id,name,newsState.club)).join(''))+'</div>';
@@ -66,14 +75,14 @@ function newsArticle(row) {
   const tag=row.leagues.map(id=>leagues[id].name).join(' · ');
   return '<li class="news-entry"><article><a class="news-link" href="'+safeUrl(row.url)+'" target="_blank" rel="noopener noreferrer">'+
     '<div class="news-copy"><p class="news-competition">'+escapeHtml(tag)+'</p><h3>'+escapeHtml(row.title)+
-    '</h3><div class="news-meta"><span>'+escapeHtml(name)+'</span><time datetime="'+escapeHtml(row.publishedAt)+
+    '</h3><div class="news-meta"><span class="news-source-label">'+newsLogo(row.source)+escapeHtml(name)+'</span><time datetime="'+escapeHtml(row.publishedAt)+
     '">'+vnTimestamp.format(new Date(row.publishedAt))+'</time></div></div></a></article></li>';
 }
 
 function newsSources() {
   return '<details class="panel padded news-sources"><summary>Chuyên mục của các nguồn</summary><ul class="links-list">'+
-    Object.values(newsPublishers).map(([name,,url])=>'<li><a href="'+safeUrl(url)+
-      '" target="_blank" rel="noopener noreferrer">'+escapeHtml(name)+'</a></li>').join('')+'</ul>'+newsVffSections()+'</details>';
+    Object.entries(newsPublishers).map(([id,[name,,url]])=>'<li><a class="news-source-label" href="'+safeUrl(url)+
+      '" target="_blank" rel="noopener noreferrer">'+newsLogo(id)+escapeHtml(name)+'</a></li>').join('')+'</ul>'+newsVffSections()+'</details>';
 }
 function newsResults() {
   const feed=newsSnapshot;
@@ -113,6 +122,10 @@ function newsView() {
   return heading('Tin tức','V.League 1, V.League 2 và Cúp Quốc gia · Mở bài gốc tại nguồn')+
     '<section class="panel news-controls" aria-label="Bộ lọc tin tức">'+newsFilters()+'</section>'+
     '<div id="news-results">'+newsResults()+'</div>'+newsSources();
+}
+function selectNewsSource(id) {
+  newsState.source=id;
+  content.querySelectorAll('[data-news-source]').forEach(button=>setSelected(button,button.dataset.newsSource===id));
 }
 function newsIsOpen() {
   return state.tab==='news' && !state.match && !state.missingMatch;
