@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from html import unescape
 import json
+from pathlib import Path
 import re
 import subprocess
 import unicodedata
@@ -326,6 +327,17 @@ def match_highlights(data, articles):
     return winners,unresolved
 
 
+def archive_evidence(season):
+    path=Path(__file__).with_name('highlight-archive-evidence.json')
+    if not path.is_file():
+        return []
+    payload=json.loads(path.read_text(encoding='utf-8'))
+    if payload['season']!=season:
+        return []
+    return [(date.fromisoformat(item['publishedOn']),item['url'],item['title'],None,'fpt-verified')
+            for item in payload['videos'] if is_youtube(item['url'])]
+
+
 def discover(load,cache,data,at,recent_days=None):
     start=min(date.fromisoformat(v['start']) for v in data['leagues'].values() if v.get('start'))
     cutoff=max(start,datetime.fromisoformat(at).date()-timedelta(days=recent_days)) if recent_days else start
@@ -339,7 +351,7 @@ def discover(load,cache,data,at,recent_days=None):
         if recent_days is None:
             tasks[f'playlist-{league}']=lambda league=league,playlist=playlist: playlist_articles(
                 youtube_fetch('/playlist?list='+playlist,3_000_000),league,data['season'])
-    articles, failures, readable = [], {}, set()
+    articles, failures, readable = archive_evidence(data['season']), {}, set()
 
     def collect(item):
         label,scan=item
@@ -366,7 +378,9 @@ def discover(load,cache,data,at,recent_days=None):
     if recent_days is None:
         # Recover a misfiled FPT playlist item only when its actual upload date
         # identifies a single fixture on that day across the three competitions.
-        unresolved_fpt=sorted({post[1] for post in articles if len(post)>=5 and post[4]=='fpt' and post[1] in unresolved})
+        matched_urls=set(winners.values())
+        unresolved_fpt=sorted({post[1] for post in articles if len(post)>=5 and post[4]=='fpt'
+                               and post[1] in unresolved and post[1] not in matched_urls})
         verified=[]
         with ThreadPoolExecutor(max_workers=4) as pool:
             probes={f'video-{url[-11:]}':lambda url=url: [
@@ -379,9 +393,9 @@ def discover(load,cache,data,at,recent_days=None):
                     verified.extend(posts)
         articles.extend(verified)
         if verified:
-            winners,resolved=match_highlights(data,articles)
-            matched_urls=set(winners.values())
-            unresolved={url:title for url,title in resolved.items() if url not in matched_urls}
+            winners,unresolved=match_highlights(data,articles)
+    matched_urls=set(winners.values())
+    unresolved={url:title for url,title in unresolved.items() if url not in matched_urls}
     vpf_checked=bool(readable.intersection({'hub','api',*ARCHIVES}))
     full_scan='api' in readable or set(PANELS).issubset(readable)
     fpt_links={post[1] for post in articles if len(post)>=5 and post[4] in {'fpt','fpt-verified'}}

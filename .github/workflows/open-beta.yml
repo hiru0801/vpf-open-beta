@@ -884,7 +884,7 @@ jobs:
             fi
           else
             flags=(--force-vpf)
-            if [[ "$EVENT_NAME" == workflow_dispatch || ! -f "$state/vpf/highlight-archive-at.txt" ]]; then
+            if [[ "$EVENT_NAME" != schedule || ! -f "$state/vpf/highlight-archive-at.txt" ]]; then
               flags+=(--refresh-highlights)
             fi
             if [[ -f vpf-sync-input.json ]]; then flags+=(--delivery "$GITHUB_WORKSPACE/vpf-sync-input.json"); fi

@@ -52,6 +52,7 @@ def main():
     for patch in ('reader.patch', 'pages.patch'):
         subprocess.run(['git', 'apply', str(highlights/patch)], cwd=ROOT, check=True)
     shutil.copyfile(highlights/'vpf_highlights.py', ROOT/'app/tools/vpf_highlights.py')
+    shutil.copyfile(highlights/'archive-evidence.json', ROOT/'app/tools/highlight-archive-evidence.json')
 
 
 if __name__ == '__main__':

@@ -20,6 +20,7 @@ fetch "$raw/$main/vpf-bundle.zip" -o "$scratch/vpf-bundle.zip"
 fetch "$raw/$main/.github/workflows/open-beta.yml" -o "$scratch/open-beta.yml"
 fetch "$raw/$main/tools/highlights/reader.patch" -o "$scratch/highlight-reader.patch"
 fetch "$raw/$main/tools/highlights/vpf_highlights.py" -o "$scratch/vpf_highlights.py"
+fetch "$raw/$main/tools/highlights/archive-evidence.json" -o "$scratch/highlight-archive-evidence.json"
 fetch "$raw/$state/data/updates.json" -o "$scratch/updates.json"
 if ! fetch "$raw/$main/vpf-sync-input.json" -o "$scratch/delivery.json"; then
   rm -f -- "$scratch/delivery.json"
@@ -31,7 +32,7 @@ fi
   awk '/^          git apply <</{body=1;next} /^          VPF_PATCH$/{exit} body{print substr($0,11)}' open-beta.yml > source.patch
   git apply source.patch
   git apply highlight-reader.patch
-  install -m 644 vpf_highlights.py app/tools/vpf_highlights.py
+  install -m 644 vpf_highlights.py highlight-archive-evidence.json app/tools/
   "$python_exec" app/tools/vpf_delivery.py --base updates.json --output delivery.json
 )
 install -m 600 "$scratch/delivery.json" "$output"
