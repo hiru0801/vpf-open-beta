@@ -13,6 +13,8 @@ from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 
+from lxml.etree import LxmlError
+
 from vpf_http import fetch
 
 ROOT = 'https://vpf.vn/category/video-highlight/'
@@ -357,7 +359,7 @@ def discover(load,cache,data,at,recent_days=None):
         label,scan=item
         try:
             return label,scan(),None
-        except (ValueError,OSError,subprocess.CalledProcessError,KeyError,TypeError,ElementTree.ParseError) as error:
+        except (ValueError,OSError,subprocess.CalledProcessError,KeyError,TypeError,ElementTree.ParseError,LxmlError) as error:
             return label,[],str(error)
 
     def read_sources(sources):
