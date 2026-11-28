@@ -1,0 +1,59 @@
+--- a/app/tools/build-web.cjs
++++ b/app/tools/build-web.cjs
+@@ -83,7 +83,7 @@
+ json(path.join(out,'news-feed.json'),{...window.VPF_NEWS,mode:'snapshot'});
+ const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8')
+   .replace('</head>','  <link rel="manifest" href="manifest.webmanifest">\n'+
+-    '  <link rel="icon" type="image/png" href="'+folder+'assets/app-192.png">\n'+
++    '  <link rel="icon" type="image/png" sizes="32x32" href="'+folder+'assets/app-32.png">\n'+
+     '  <link rel="apple-touch-icon" href="'+folder+'assets/app-180.png">\n</head>')
+   .replace('src="data.js"','src="'+folder+'index-data.js"')
+   .replace(/\sfile:(?=[; ])/g,'')
+--- a/app/tools/prepare-assets.py
++++ b/app/tools/prepare-assets.py
+@@ -5,12 +5,14 @@
+ import subprocess
+ import sys
+ 
+-from PIL import Image, ImageDraw, ImageFont
++from PIL import Image
+ from fontTools.ttLib import TTFont
+ 
+ source,output=map(Path,sys.argv[1:])
+ output.mkdir(parents=True)
+ for file in sorted(source.iterdir()):
++    if file.name == 'vpf-brand.png':
++        continue
+     if file.suffix.lower() in ('.png','.webp','.jpg','.jpeg'):
+         with Image.open(file) as original:
+             size=192 if not file.name.startswith('club-') else 144
+@@ -30,12 +32,9 @@
+ if 0x2304 not in cmap:
+     raise ValueError('Font web thiếu dấu mũi tên của nút Đổi giải.')
+ 
+-for size in (180,192,512):
+-    icon=Image.new('RGB',(size,size),'#172b49')
+-    draw=ImageDraw.Draw(icon)
+-    scale=size/192
+-    draw.rounded_rectangle((28*scale,28*scale,164*scale,164*scale),radius=28*scale,
+-                           fill='#244776',outline='#c2d7f4',width=round(2*scale))
+-    title=ImageFont.load_default(size=round(44*scale))
+-    draw.text((size/2,size/2),'VPF',font=title,fill='#ffffff',anchor='mm')
+-    icon.save(output/f'app-{size}.png',optimize=True)
++with Image.open(source/'vpf-brand.png') as brand:
++    if brand.width != brand.height or brand.width < 512:
++        raise ValueError('Logo VPF phải là ảnh vuông từ 512 px.')
++    for size in (32, 180, 192, 512):
++        icon = brand.resize((size, size), Image.Resampling.LANCZOS)
++        icon.save(output/f'app-{size}.png', optimize=True)
+--- a/app/worker.js
++++ b/app/worker.js
+@@ -9,7 +9,7 @@
+ const shell=['index.html',...['index-data.js','app.js','theme.js','styles.css','data-update.js','calendar.js',
+   'match-view.js','competition-view.js','web-data.js','live-view.js','news-view.js','news-snapshot.js',
+   'assets/InterVariable.woff2','assets/vl1.webp','assets/vl2.webp','assets/nc.webp',
+-  'assets/app-180.png','assets/app-192.png','assets/app-512.png'].map(file=>root+file)];
++  'assets/app-32.png','assets/app-180.png','assets/app-192.png','assets/app-512.png'].map(file=>root+file)];
+ const scope=new URL('./',self.location.href);
+ const marker=new URL('__vpf_cache_revision__',scope);
+ 

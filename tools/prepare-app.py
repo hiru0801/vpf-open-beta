@@ -42,6 +42,9 @@ def main():
     subprocess.run(['git', 'apply', str(news/'integration.patch')], cwd=ROOT, check=True)
     for logo in sorted((news/'assets').glob('press-*.png')):
         shutil.copyfile(logo, ROOT/'app/assets'/logo.name)
+    brand = ROOT/'tools/brand'
+    subprocess.run(['git', 'apply', str(brand/'integration.patch')], cwd=ROOT, check=True)
+    shutil.copyfile(brand/'vpf-brand.png', ROOT/'app/assets/vpf-brand.png')
 
 
 if __name__ == '__main__':
