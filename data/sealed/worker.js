@@ -1,13 +1,14 @@
 'use strict';
 
 // Release paths are immutable. Keep the immediately previous shell available during updates.
-const releaseId='3a82dcf6d56fce5042b4b40c';
-const revision=Number('26');
-const prefix='vpf-app-'+new URL('./',self.location.href).pathname+':';
+const releaseId='c327ffbfc40462ea91d74ce8';
+const revision=Number('27');
+const appPrefix='vpf-app-'+new URL('./',self.location.href).pathname+':';
+const prefix=appPrefix+'directory:';
 const cacheName=prefix+releaseId;
 const root='releases/'+releaseId+'/';
-const shell=['index.html',...['index-data.js','app.js','theme.js','styles.css','data-update.js','calendar.js',
-  'match-view.js','competition-view.js','web-data.js','live-view.js','news-view.js','news-snapshot.js',
+const shell=['index.html','legal.html','legal.css',...['index-data.js','app.js','theme.js','styles.css','data-update.js','calendar.js',
+  'match-view.js','competition-view.js','web-data.js','live-view.js','news-view.js',
   'assets/InterVariable.woff2','assets/vl1.webp','assets/vl2.webp','assets/nc.webp',
   'assets/app-32.png','assets/app-180.png','assets/app-192.png','assets/app-512.png'].map(file=>root+file)];
 const scope=new URL('./',self.location.href);
@@ -23,7 +24,9 @@ self.addEventListener('install',event=>{
 });
 self.addEventListener('activate',event=>{
   event.waitUntil((async()=>{
-    const keys=(await caches.keys()).filter(key=>key.startsWith(prefix) && key!==cacheName);
+    const owned=(await caches.keys()).filter(key=>key.startsWith(appPrefix));
+    await Promise.all(owned.filter(key=>!key.startsWith(prefix)).map(key=>caches.delete(key)));
+    const keys=owned.filter(key=>key.startsWith(prefix) && key!==cacheName);
     const indexed=await Promise.all(keys.map(async key=>{
       const stamp=await (await caches.open(key)).match(marker);
       return [key,stamp?Number(await stamp.text()):0];
@@ -39,6 +42,13 @@ self.addEventListener('fetch',event=>{
   const url=new URL(request.url);
   if (request.method!=='GET' || url.origin!==scope.origin || !url.pathname.startsWith(scope.pathname)) return;
   const relative=url.pathname.slice(scope.pathname.length);
+  if (relative==='legal.html' || relative==='legal.css') {
+    event.respondWith((async()=>{
+      try { return await fetch(request); }
+      catch { return (await caches.open(cacheName)).match(request); }
+    })());
+    return;
+  }
   if (request.mode==='navigate' && (relative==='' || relative==='index.html')) {
     event.respondWith((async()=>{
       try {
