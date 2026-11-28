@@ -1,8 +1,8 @@
 'use strict';
 
 // Release paths are immutable. Keep the immediately previous shell available during updates.
-const releaseId='0412e0db5d8566d38401e273';
-const revision=Number('24');
+const releaseId='2908a10f18e6782305fa5590';
+const revision=Number('25');
 const prefix='vpf-app-'+new URL('./',self.location.href).pathname+':';
 const cacheName=prefix+releaseId;
 const root='releases/'+releaseId+'/';

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "mode": "sync",
-  "state": "ok",
+  "state": "delayed",
   "lastSuccessfulCheckAt": "2026-11-27T21:29:39.614+07:00",
   "lastHighlightCheckAt": "2026-11-27T21:29:39.614+07:00",
   "pendingReview": 0
