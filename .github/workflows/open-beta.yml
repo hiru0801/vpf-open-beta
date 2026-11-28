@@ -854,7 +854,8 @@ jobs:
             fi
           fi
 
-          if [[ "$EVENT_NAME" == schedule && -f "$state/sealed/legal.html" ]]; then
+          if [[ "$EVENT_NAME" == schedule ]] &&
+             jq -e '.newsPolicy == "headlines"' "$state/sealed/release-info.json" >/dev/null; then
             test -f "$state/live/index.json" || exit 1
             live_hash=$(sha256sum "$state/live/index.json" | cut -d ' ' -f1)
             public_url="https://hiru0801.github.io/vpf-open-beta/live/index.json"
@@ -938,7 +939,7 @@ jobs:
           curl -fsS --retry 3 --max-time 20 "$root/live/index.json?$stamp" -o match-day.json
           printf '%s  match-day.json\n' "$LIVE_HASH" | sha256sum -c
           jq -e '.schema == 1 and .season == "2026/27" and (.matches | type == "object")' match-day.json
-          jq -e '. == {"schema":1,"mode":"directory","articles":[]}' news-feed.json
+          jq -e '.schema == 1 and (.mode == "sync" or .mode == "snapshot") and (.articles | type == "array")' news-feed.json
           curl -fsSL --retry 3 --max-time 20 "$root/legal.html?$stamp" -o legal.html
           grep -q 'id="dinh-chinh"' legal.html
           jq -e '.schema == 1 and (.mode == "sync" or .mode == "snapshot")' data-status.json

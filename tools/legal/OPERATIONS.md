@@ -7,7 +7,7 @@
 | Lịch, tỷ số, diễn biến, bảng xếp hạng | VPF và nguồn đối chiếu theo trận | Trường dữ liệu và liên kết | Điều kiện đọc tự động và công bố theo nhóm dữ liệu |
 | Phiếu đăng ký | Chuyên mục và trang trận VPF | Đội hình đã đối chiếu, liên kết gốc | Quyền xử lý phiếu, phạm vi trường công bố và quy trình yêu cầu dữ liệu cá nhân |
 | Tên, logo giải và CLB | Đơn vị tổ chức, CLB hoặc chủ thể quyền | Nhận diện đội và giải trong giao diện tra cứu | Phạm vi tái sử dụng và yêu cầu nhận diện |
-| Bài báo, logo tòa soạn | VFF, Bóng Đá Plus, Thanh Niên, Znews, VTC News, VnExpress | Tên nguồn và liên kết chuyên mục | Phân loại pháp lý và quyền dẫn lại hoặc dùng logo |
+| Bài báo, logo tòa soạn | VFF, Bóng Đá Plus, Thanh Niên, Znews, VTC News, VnExpress | Tiêu đề, giờ đăng, tên nguồn và liên kết bài gốc hoặc chuyên mục | Phân loại pháp lý và quyền dẫn lại hoặc dùng logo |
 | Video và phát sóng | VPF, đài hoặc kênh phát ghi theo trận | Liên kết ra nguồn | Điều kiện của kênh trước khi nhúng hoặc phát lại |
 | Nhận diện app | Đồ họa sân bóng do dự án tạo | Biểu tượng tab và PWA | Đối chiếu trước khi đổi tên hoặc biểu tượng |
 
@@ -23,5 +23,5 @@ Ghi ngày, đầu mối xác nhận, phạm vi, thời hạn và căn cứ bằn
 ## Web và mobile
 
 - Dùng chung danh mục nguồn và nội dung pháp lý, sau đó đối chiếu dữ liệu, quyền của hệ điều hành và nhà cung cấp trên từng nền tảng.
-- Phục vụ tệp tĩnh bằng CDN và tải chi tiết theo nhu cầu. Tách phần thu thập khỏi yêu cầu của người dùng. Danh mục Tin tức không cần gọi API.
+- Phục vụ tệp tĩnh bằng CDN và tải chi tiết theo nhu cầu. Tách phần thu thập khỏi yêu cầu của người dùng. Tin tức dùng một tệp JSON cho các bộ lọc, tải khi mở mục Tin tức. Tác vụ thu thập chạy riêng và người đọc mở bài gốc tại nguồn.
 - Chỉ thử tải trên hạ tầng được phép. Đo tỉ lệ cache hit, tỉ lệ lỗi, p95, băng thông, độ trễ xuất bản và số yêu cầu tới origin. Kiểm tra giới hạn GitHub Pages trước khi tăng quy mô. Kiểm thử mobile trên mạng yếu, khi chạy nền và khi mất mạng.
