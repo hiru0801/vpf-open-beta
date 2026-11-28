@@ -48,6 +48,10 @@ def main():
     subprocess.run(['git', 'apply', str(legal/'integration.patch')], cwd=ROOT, check=True)
     for name in ('legal.html', 'legal.css', 'news-view.js'):
         shutil.copyfile(legal/name, ROOT/'app'/name)
+    highlights = ROOT/'tools/highlights'
+    for patch in ('reader.patch', 'pages.patch'):
+        subprocess.run(['git', 'apply', str(highlights/patch)], cwd=ROOT, check=True)
+    shutil.copyfile(highlights/'vpf_highlights.py', ROOT/'app/tools/vpf_highlights.py')
 
 
 if __name__ == '__main__':

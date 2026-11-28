@@ -11,9 +11,12 @@ on:
       - tools/legal/**
       - tools/matchday/**
       - tools/news/**
+      - tools/highlights/**
   workflow_dispatch:
   schedule:
-    - cron: '3-58/5 * * * *'
+    - cron: '3-48/15 * * * *'
+    - cron: '8-53/15 * * * *'
+    - cron: '13-58/15 * * * *'
 
 concurrency:
   group: vpf-open-beta
@@ -822,6 +825,8 @@ jobs:
             sudo apt-get install -y -qq --no-install-recommends tesseract-ocr tesseract-ocr-eng
           fi
       - run: python -m pip install --disable-pip-version-check -r requirements.txt fonttools==4.57.0
+      - name: Check highlight matching
+        run: PYTHONPATH=app/tools python tools/highlights/check.py
       - name: Restore the last verified release
         shell: bash
         run: |
@@ -842,6 +847,7 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
         run: |
           printf 'artifact_name=github-pages-%s\n' "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
           set -euo pipefail
@@ -857,17 +863,30 @@ jobs:
 
           if [[ "$EVENT_NAME" == schedule ]] &&
              jq -e '.newsPolicy == "headlines"' "$state/sealed/release-info.json" >/dev/null; then
+            if [[ "$EVENT_SCHEDULE" == '3-48/15 * * * *' ]]; then
+              python app/tools/sync-pages.py --highlights-only --state "$state" --seed "$GITHUB_WORKSPACE/seed-web" \
+                --output "$output" --summary "$summary"
+            fi
             test -f "$state/live/index.json" || exit 1
             live_hash=$(sha256sum "$state/live/index.json" | cut -d ' ' -f1)
             public_url="https://hiru0801.github.io/vpf-open-beta/live/index.json"
-            if curl -fsS --max-time 12 "$public_url?v=$live_hash" -o "$RUNNER_TEMP/public-live.json" &&
-              [[ "$(sha256sum "$RUNNER_TEMP/public-live.json" | cut -d ' ' -f1)" == "$live_hash" ]]; then
-              echo 'deploy=false' >> "$GITHUB_OUTPUT"
-              exit 0
+            if [[ ! -d "$output" ]]; then
+              release_id=$(jq -er '.releaseId' "$state/sealed/release-info.json")
+              root=${public_url%/live/index.json}
+              if curl -fsS --max-time 12 "$public_url?v=$live_hash" -o "$RUNNER_TEMP/public-live.json" &&
+                [[ "$(sha256sum "$RUNNER_TEMP/public-live.json" | cut -d ' ' -f1)" == "$live_hash" ]] &&
+                curl -fsS --max-time 12 "$root/release-info.json?v=$release_id" |
+                  jq -e --arg id "$release_id" '.releaseId == $id' >/dev/null; then
+                echo 'deploy=false' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              python -m live.stage --state "$state" --output "$output"
             fi
-            python -m live.stage --state "$state" --output "$output"
           else
             flags=(--force-vpf)
+            if [[ "$EVENT_NAME" == workflow_dispatch || ! -f "$state/vpf/highlight-archive-at.txt" ]]; then
+              flags+=(--refresh-highlights)
+            fi
             if [[ -f vpf-sync-input.json ]]; then flags+=(--delivery "$GITHUB_WORKSPACE/vpf-sync-input.json"); fi
             result=0
             python app/tools/sync-pages.py --state "$state" --seed "$GITHUB_WORKSPACE/seed-web" \

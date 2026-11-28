@@ -1,0 +1,34 @@
+--- a/app/tools/backfill-vpf.py
++++ b/app/tools/backfill-vpf.py
+@@ -299,7 +299,7 @@
+     winners,report=discover(source['cached_page'],video_cache,data,now,recent_days)
+     # Video provenance is separate from the match result, even on the same sync run.
+     stamp=(datetime.fromisoformat(now)+timedelta(milliseconds=1)).isoformat(timespec='milliseconds')
+-    new=[dict(id=id,at=stamp,source=['VPF · Video tổng hợp',link],patch={'highlightUrl':link})
++    new=[dict(id=id,at=stamp,source=[report['sources'][id],link],patch={'highlightUrl':link})
+          for id,link in sorted(winners.items()) if data['matches'][id].get('highlightUrl')!=link]
+     report['changed']=len(new)
+     if not new:
+--- a/app/tools/sync-vpf.py
++++ b/app/tools/sync-vpf.py
+@@ -14,7 +14,6 @@
+ import sys
+
+ from release_inputs import APP, verify_bundle
+-from vpf_highlights import ARCHIVES
+
+ importer=runpy.run_path(str(Path(__file__).with_name('backfill-vpf.py')))
+ VN=importer['source']['VN']
+@@ -154,10 +153,10 @@
+     candidate,highlights=importer['add_highlights'](cache,at,candidate,None if full else recent)
+     atomic_json(state/'highlight-check.json',highlights)
+     health['highlightSourcesFailed']=len(highlights['errors'])
+-    if health['highlightSourcesFailed']<len(ARCHIVES)+1:
++    if highlights['vpfChecked']:
+         health['lastHighlightCheckAt']=at
+     if highlights['errors']:
+-        print('Một số nguồn video VPF chưa truy cập được. Xem highlight-check.json.',file=sys.stderr)
++        print('Một số nguồn video chưa truy cập được. Xem highlight-check.json.',file=sys.stderr)
+     atomic_json(state/'latest-check.json',report)
+     queue_path=state/'review-queue.json'
+     queue=read(queue_path) if queue_path.is_file() else {}
